@@ -553,7 +553,10 @@ int team_destroy(struct team_handle *th)
 /* libnl uses default 32k socket receive buffer size,
  * which can get too small. Use 192k for all sockets.
  */
-#define NETLINK_RCVBUF 196608
+/* Increase value from 192k to rmem_max since to many (>6) parallel
+ * teamd instances gives "out of buffer" error for the recv socket
+ */
+#define NETLINK_RCVBUF 327680
 
 /**
  * @param th		libteam library context
