@@ -2,7 +2,7 @@ MAINTAINERCLEANFILES = Makefile.in
 
 ACLOCAL_AMFLAGS = -I m4
 
-AM_CFLAGS = -I${top_srcdir}/include
+AM_CFLAGS = -I${top_srcdir}/include -Wstrict-aliasing
 
 AM_CPPFLAGS='-DLOCALSTATEDIR="$(localstatedir)"'
 
@@ -19,7 +19,9 @@ teamd_SOURCES=teamd.c teamd_common.c teamd_json.c teamd_config.c teamd_state.c \
 	      teamd_zmq.c teamd_usock.c teamd_phys_port_check.c \
 	      teamd_bpf_chef.c teamd_hash_func.c teamd_balancer.c \
 	      teamd_runner_basic_ones.c teamd_runner_activebackup.c \
-	      teamd_runner_loadbalance.c teamd_runner_lacp.c
+	      teamd_runner_loadbalance.c teamd_runner_lacp.c \
+	      teamd_runner_ttdp.c teamd_lw_ttdp.c ttdp_checksum.c \
+	      teamd_lag_state_persistence.c
 
 EXTRA_DIST = example_configs dbus redhat teamd.conf.in
 
@@ -27,4 +29,4 @@ noinst_HEADERS = teamd.h teamd_workq.h teamd_bpf_chef.h teamd_ctl.h \
 		 teamd_json.h teamd_dbus.h teamd_zmq.h teamd_usock.h \
 		 teamd_dbus_common.h teamd_usock_common.h teamd_config.h \
 		 teamd_state.h teamd_phys_port_check.h teamd_link_watch.h \
-		 teamd_zmq_common.h
+		 teamd_zmq_common.h teamd_lw_ttdp.h teamd_lag_state_persistence.h

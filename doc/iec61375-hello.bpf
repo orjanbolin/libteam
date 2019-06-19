@@ -1,0 +1,218 @@
+  ld [2]                    ; check dest. MAC and other Ethernet stuff */
+  jneq #0xc200000e, drop */
+  ldh [0]
+  jneq #0x0180, drop
+  ld vlan_avail
+  jneq #1, drop
+  ld vlan_tci
+  and #0x0FFF
+  jneq #0x01EC, drop
+  ldh [12]
+  jneq #0x88CC, drop
+  ld poff                   ; have M[0] hold the last ok header start position
+  tax
+  ld len
+  sub x
+  sub #2                    ; size of the first TLV header
+  st M[0]
+  ld #0x0e                  ; the first TLV header starts here
+  ldx #0x0
+  st M[1]                   ; this snippet tests whether we'd
+  stx M[2]                  ; jump out of bounds, i.e. if
+  ld M[0]                   ; ((accumulated TLV sizes in x) -
+  ldx M[1]                  ; (packet payload size)) < 0
+  sub x
+  jset #0x80000000, drop
+  ld M[1]
+  ldx M[2]
+  tax
+  ldh [x + 0]               ; test one TLV - load TLV header
+  and #0xFE00               ; extract type
+  jeq #0x0000, drop         ; type 0 is EOF TLV
+  jneq #0xFE00, skip_tlv_1  ; skip if not HELLO
+  ldh [x + 0]               ; reload TLV header
+  and #0x01FF               ; extract length
+  jeq #0x56, okay           ; must be 86
+skip_tlv_1: ldh [x + 0]     ; reload TLV header
+  and #0x01FF               ; extract length
+  add #2                    ; header length not included
+  add x                     ; previous header offset
+  st M[1]
+  stx M[2]
+  ld M[0]
+  ldx M[1]
+  sub x
+  jset #0x80000000, drop
+  ld M[1]
+  ldx M[2]
+  tax
+  ldh [x + 0]               ; test next TLV... etc
+  and #0xFE00
+  jeq #0x0000, drop
+  jneq #0xFE00, skip_tlv_2
+  ldh [x + 0]
+  and #0x01FF
+  jeq #0x56, okay
+skip_tlv_2: ldh [x + 0]
+  and #0x01FF
+  add #2
+  add x
+  st M[1]
+  stx M[2]
+  ld M[0]
+  ldx M[1]
+  sub x
+  jset #0x80000000, drop
+  ld M[1]
+  ldx M[2]
+  tax
+  ldh [x + 0]
+  and #0xFE00
+  jeq #0x0000, drop
+  jneq #0xFE00, skip_tlv_3
+  ldh [x + 0]
+  and #0x01FF
+  jeq #0x56, okay
+skip_tlv_3: ldh [x + 0]
+  and #0x01FF
+  add #2
+  add x
+  st M[1]
+  stx M[2]
+  ld M[0]
+  ldx M[1]
+  sub x
+  jset #0x80000000, drop
+  ld M[1]
+  ldx M[2]
+  tax
+  ldh [x + 0]
+  and #0xFE00
+  jeq #0x0000, drop
+  jneq #0xFE00, skip_tlv_4
+  ldh [x + 0]
+  and #0x01FF
+  jeq #0x56, okay
+skip_tlv_4: ldh [x + 0]
+  and #0x01FF
+  add #2
+  add x
+  st M[1]
+  stx M[2]
+  ld M[0]
+  ldx M[1]
+  sub x
+  jset #0x80000000, drop
+  ld M[1]
+  ldx M[2]
+  tax
+  ldh [x + 0]
+  and #0xFE00
+  jeq #0x0000, drop
+  jneq #0xFE00, skip_tlv_5
+  ldh [x + 0]
+  and #0x01FF
+  jeq #0x56, okay
+skip_tlv_5: ldh [x + 0]
+  and #0x01FF
+  add #2
+  add x
+  st M[1]
+  stx M[2]
+  ld M[0]
+  ldx M[1]
+  sub x
+  jset #0x80000000, drop
+  ld M[1]
+  ldx M[2]
+  tax
+  ldh [x + 0]
+  and #0xFE00
+  jeq #0x0000, drop
+  jneq #0xFE00, skip_tlv_6
+  ldh [x + 0]
+  and #0x01FF
+  jeq #0x56, okay
+skip_tlv_6: ldh [x + 0]
+  and #0x01FF
+  add #2
+  add x
+  st M[1]
+  stx M[2]
+  ld M[0]
+  ldx M[1]
+  sub x
+  jset #0x80000000, drop
+  ld M[1]
+  ldx M[2]
+  tax
+  ldh [x + 0]
+  and #0xFE00
+  jeq #0x0000, drop
+  jneq #0xFE00, skip_tlv_7
+  ldh [x + 0]
+  and #0x01FF
+  jeq #0x56, okay
+skip_tlv_7: ldh [x + 0]
+  and #0x01FF
+  add #2
+  add x
+  st M[1]
+  stx M[2]
+  ld M[0]
+  ldx M[1]
+  sub x
+  jset #0x80000000, drop
+  ld M[1]
+  ldx M[2]
+  tax
+  ldh [x + 0]
+  and #0xFE00
+  jeq #0x0000, drop
+  jneq #0xFE00, skip_tlv_8
+  ldh [x + 0]
+  and #0x01FF
+  jeq #0x56, okay
+skip_tlv_8: ldh [x + 0]
+  and #0x01FF
+  add #2
+  add x
+  st M[1]
+  stx M[2]
+  ld M[0]
+  ldx M[1]
+  sub x
+  jset #0x80000000, drop
+  ld M[1]
+  ldx M[2]
+  tax
+  ldh [x + 0]
+  and #0xFE00
+  jeq #0x0000, drop
+  jneq #0xFE00, skip_tlv_9
+  ldh [x + 0]
+  and #0x01FF
+  jeq #0x56, okay
+skip_tlv_9: ldh [x + 0]
+  and #0x01FF
+  add #2
+  add x
+  st M[1]
+  stx M[2]
+  ld M[0]
+  ldx M[1]
+  sub x
+  jset #0x80000000, drop
+  ld M[1]
+  ldx M[2]
+  tax
+  ldh [x + 0]
+  and #0xFE00
+  jeq #0x0000, drop
+  jneq #0xFE00, drop
+  ldh [x + 0]
+  and #0x01FF
+  jeq #0x56, okay
+  jmp drop
+  okay: ret #-1             ; accept entire packet
+  drop: ret #0              ; accept nothing

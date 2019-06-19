@@ -81,6 +81,49 @@ static int attach_filter(int sock, const struct sock_fprog *pref_fprog,
 	return 0;
 }
 
+/* sockfds[i] = socket(AF_PACKET, SOCK_RAW | SOCK_NONBLOCK, htons(ETH_P_8021Q)); */
+int teamd_packet_sock_open_type_ext(int type, int *sock_p, const uint32_t ifindex,
+				const unsigned short family,
+				const struct sock_fprog *fprog,
+				const struct sock_fprog *alt_fprog)
+{
+	struct sockaddr_ll ll_my;
+	int sock;
+	int ret;
+	int err;
+
+	sock = socket(AF_PACKET, type, family);
+	if (sock == -1) {
+		teamd_log_err("Failed to create packet socket.");
+		return -errno;
+	}
+
+	if (fprog) {
+		err = attach_filter(sock, fprog, alt_fprog);
+		if (err) {
+			teamd_log_err("Failed to attach filter.");
+			goto close_sock;
+		}
+	}
+
+	memset(&ll_my, 0, sizeof(ll_my));
+	ll_my.sll_family = AF_PACKET;
+	ll_my.sll_ifindex = ifindex;
+	ll_my.sll_protocol = family;
+	ret = bind(sock, (struct sockaddr *) &ll_my, sizeof(ll_my));
+	if (ret == -1) {
+		teamd_log_err("Failed to bind socket.");
+		err = -errno;
+		goto close_sock;
+	}
+
+	*sock_p = sock;
+	return 0;
+close_sock:
+	close(sock);
+	return err;
+}
+
 int teamd_packet_sock_open_type(int type, int *sock_p, const uint32_t ifindex,
 				const unsigned short family,
 				const struct sock_fprog *fprog,

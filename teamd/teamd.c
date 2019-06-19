@@ -65,6 +65,7 @@ static const struct teamd_runner *teamd_runner_list[] = {
 	&teamd_runner_activebackup,
 	&teamd_runner_loadbalance,
 	&teamd_runner_lacp,
+	&teamd_runner_ttdp
 };
 
 #define TEAMD_RUNNER_LIST_SIZE ARRAY_SIZE(teamd_runner_list)
@@ -280,7 +281,7 @@ static int handle_period_fd(int fd)
 		return -EINVAL;
 	}
 	if (exp > 1)
-		teamd_log_warn("some periodic function calls missed (%" PRIu64 ")",
+		teamd_log_warn("fd %d: some periodic function calls missed (%" PRIu64 ")", fd,
 			       exp - 1);
 	return 0;
 }
@@ -693,12 +694,23 @@ int teamd_loop_callback_disable(struct teamd_context *ctx, const char *cb_name,
 static int callback_daemon_signal(struct teamd_context *ctx, int events,
 				  void *priv)
 {
+	static int failed = 0;
 	int sig;
 
 	/* Get signal */
 	if ((sig = daemon_signal_next()) <= 0) {
-		teamd_log_err("daemon_signal_next() failed.");
-		return -EINVAL;
+		teamd_log_err("daemon_signal_next() failed = %d", sig);
+		daemon_signal_done();
+
+		if (daemon_signal_init(SIGINT, SIGTERM, SIGQUIT, SIGHUP, 0) != 0) {
+			sig = SIGINT;
+		} else if (++failed < 10) {
+			return 0;
+		} else {
+			sig = SIGINT;
+		}
+	} else {
+		failed = 0;
 	}
 
 	/* Dispatch signal */
@@ -1467,13 +1479,18 @@ static void teamd_fini(struct teamd_context *ctx)
 	team_free(ctx->th);
 }
 
+static void exiting(void) {
+	teamd_log_info("Exiting, clearing PID file\n");
+	daemon_pid_file_remove();
+}
+
 static int teamd_start(struct teamd_context *ctx, enum teamd_exit_code *p_ret)
 {
 	pid_t pid;
 	int err = 0;
 
 	if (getuid() == 0)
-		teamd_log_warn("This program is not intended to be run as root.");
+		teamd_log_dbg(ctx, "This program is not intended to be run as root.");
 
 	if (daemon_reset_sigs(-1) < 0) {
 		teamd_log_err("Failed to reset all signal handlers.");
@@ -1534,6 +1551,8 @@ static int teamd_start(struct teamd_context *ctx, enum teamd_exit_code *p_ret)
 		daemon_retval_send(errno);
 		return -errno;
 	}
+
+	atexit(exiting);
 
 	if (daemon_signal_init(SIGINT, SIGTERM, SIGQUIT, SIGHUP, 0) < 0) {
 		teamd_log_err("Could not register signal handlers.");

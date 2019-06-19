@@ -52,8 +52,11 @@
 
 #define teamd_log_dbgx(ctx, val, args...)	\
 	({ if (val <= ctx->debug) daemon_log(LOG_DEBUG, ##args); })
-
+#ifdef DEBUG
 #define teamd_log_dbg(ctx, args...) teamd_log_dbgx(ctx, 1, ##args)
+#else
+#define teamd_log_dbg(ctx, args...) do {} while (0)
+#endif
 
 static inline void TEAMD_BUG(void)
 {
@@ -275,6 +278,7 @@ extern const struct teamd_runner teamd_runner_random;
 extern const struct teamd_runner teamd_runner_activebackup;
 extern const struct teamd_runner teamd_runner_loadbalance;
 extern const struct teamd_runner teamd_runner_lacp;
+extern const struct teamd_runner teamd_runner_ttdp;
 
 struct teamd_port_priv {
 	int (*init)(struct teamd_context *ctx, struct teamd_port *tdport,
@@ -363,6 +367,10 @@ void teamd_balancer_port_removed(struct teamd_balancer *tb,
 int teamd_hash_func_set(struct teamd_context *ctx);
 
 int teamd_packet_sock_open_type(int type, int *sock_p, const uint32_t ifindex,
+				const unsigned short family,
+				const struct sock_fprog *fprog,
+				const struct sock_fprog *alt_fprog);
+int teamd_packet_sock_open_type_ext(int type, int *sock_p, const uint32_t ifindex,
 				const unsigned short family,
 				const struct sock_fprog *fprog,
 				const struct sock_fprog *alt_fprog);
