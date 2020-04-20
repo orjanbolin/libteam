@@ -1529,17 +1529,17 @@ static int teamd_start(struct teamd_context *ctx, enum teamd_exit_code *p_ret)
 		return -errno;
 	}
 
-	if (daemon_pid_file_create() < 0) {
-		teamd_log_err("Could not create PID file.");
-		daemon_retval_send(errno);
-		return -errno;
-	}
-
 	if (daemon_signal_init(SIGINT, SIGTERM, SIGQUIT, SIGHUP, 0) < 0) {
 		teamd_log_err("Could not register signal handlers.");
 		daemon_retval_send(errno);
 		err = -errno;
 		goto pid_file_remove;
+	}
+
+	if (daemon_pid_file_create() < 0) {
+		teamd_log_err("Could not create PID file.");
+		daemon_retval_send(errno);
+		return -errno;
 	}
 
 	err = teamd_init(ctx);
