@@ -1254,6 +1254,15 @@ static int lacp_port_load_config(struct teamd_context *ctx,
 	return 0;
 }
 
+static int teamd_sock_set_prio( int sock, int prio)
+{
+	if (setsockopt(sock, SOL_SOCKET, SO_PRIORITY, &prio, 4)) {
+		return -errno;
+	}
+
+	return 0;
+}
+
 static int lacp_port_added(struct teamd_context *ctx,
 			   struct teamd_port *tdport,
 			   void *priv, void *creator_priv)
@@ -1277,6 +1286,12 @@ static int lacp_port_added(struct teamd_context *ctx,
 					  htons(ETH_P_SLOW), NULL, NULL);
 	if (err)
 		return err;
+
+	err = teamd_sock_set_prio( lacp_port->sock, 7);
+	if (err) {
+		teamd_log_err("Failed to set prio on socket. %d", err);
+		return err;
+	}
 
 	err = slow_addr_add(lacp_port);
 	if (err)
