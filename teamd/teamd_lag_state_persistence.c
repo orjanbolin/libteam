@@ -294,12 +294,61 @@ int lag_state_write_hello_timeouts(struct teamd_context *ctx, struct ab *ab) {
 }
 
 /**
- * lag_state_write_elected_neighbor - Persist aggregate elected neighbor to state file
+ * lag_state_write_elected_neighbor_primary_state - Persist aggregate elected neighbor to state file
+ *
+ * State files:
+ * /run/train/lag/<DEVICE-NAME>/elected_neighbor/primary_state - Elected neighbor hardware address (primary state) as string
+ */
+int lag_state_write_elected_neighbor_primary_state(struct teamd_context *ctx, struct ab *ab) {
+	FILE *fp = open_lag_state_file(ctx->team_devname, "elected_neighbor/primary_state", "w");
+	if (!fp) {
+		return -1;
+	}
+	fprintf(fp, "%u\n",     ab->elected_neighbor.neighbor_primary_state);
+	fclose(fp);
+	return 0;
+}
+
+/**
+ * lag_state_write_elected_neighbor_uuid - Persist aggregate elected neighbor to state file
+ *
+ * State files:
+ * /run/train/lag/<DEVICE-NAME>/elected_neighbor/uuid - Elected neighbor hardware address (uuid) as string
+ */
+int lag_state_write_elected_neighbor_uuid(struct teamd_context *ctx, struct ab *ab) {
+	FILE *fp = open_lag_state_file(ctx->team_devname, "elected_neighbor/uuid", "w");
+	if (!fp) {
+		return -1;
+	}
+	fprintf(fp, UUID_FMT_STR "\n",
+		ab->elected_neighbor.neighbor_uuid[0],
+		ab->elected_neighbor.neighbor_uuid[1],
+		ab->elected_neighbor.neighbor_uuid[2],
+		ab->elected_neighbor.neighbor_uuid[3],
+		ab->elected_neighbor.neighbor_uuid[4],
+		ab->elected_neighbor.neighbor_uuid[5],
+		ab->elected_neighbor.neighbor_uuid[6],
+		ab->elected_neighbor.neighbor_uuid[7],
+		ab->elected_neighbor.neighbor_uuid[8],
+		ab->elected_neighbor.neighbor_uuid[9],
+		ab->elected_neighbor.neighbor_uuid[10],
+		ab->elected_neighbor.neighbor_uuid[11],
+		ab->elected_neighbor.neighbor_uuid[12],
+		ab->elected_neighbor.neighbor_uuid[13],
+		ab->elected_neighbor.neighbor_uuid[14],
+		ab->elected_neighbor.neighbor_uuid[15]);
+
+	fclose(fp);
+	return 0;
+}
+
+/**
+ * lag_state_write_elected_neighbor_mac - Persist aggregate elected neighbor to state file
  *
  * State files:
  * /run/train/lag/<DEVICE-NAME>/elected_neighbor/mac - Elected neighbor hardware address (MAC) as string
  */
-int lag_state_write_elected_neighbor(struct teamd_context *ctx, struct ab *ab) {
+int lag_state_write_elected_neighbor_mac(struct teamd_context *ctx, struct ab *ab) {
 	FILE *fp = open_lag_state_file(ctx->team_devname, "elected_neighbor/mac", "w");
 	if (!fp) {
 		return -1;

@@ -279,6 +279,7 @@ extern const struct teamd_runner teamd_runner_activebackup;
 extern const struct teamd_runner teamd_runner_loadbalance;
 extern const struct teamd_runner teamd_runner_lacp;
 extern const struct teamd_runner teamd_runner_ttdp;
+extern const struct teamd_runner teamd_runner_ttdp_s4r;
 
 struct teamd_port_priv {
 	int (*init)(struct teamd_context *ctx, struct teamd_port *tdport,

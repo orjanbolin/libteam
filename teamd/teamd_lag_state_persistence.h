@@ -42,7 +42,11 @@ int lag_state_write_remote_inhibition(struct teamd_context *ctx, struct ab *ab);
 
 int lag_state_write_hello_timeouts(struct teamd_context *ctx, struct ab *ab);
 
-int lag_state_write_elected_neighbor(struct teamd_context *ctx, struct ab *ab);
+int lag_state_write_elected_neighbor_mac(struct teamd_context *ctx, struct ab *ab);
+
+int lag_state_write_elected_neighbor_uuid(struct teamd_context *ctx, struct ab *ab);
+
+int lag_state_write_elected_neighbor_primary_state(struct teamd_context *ctx, struct ab *ab);
 
 int lag_state_write_shortening_detected(struct teamd_context *ctx, struct ab *ab);
 

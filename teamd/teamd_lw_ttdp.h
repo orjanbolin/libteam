@@ -210,6 +210,8 @@ struct lw_ttdp_port_priv {
 	uint8_t neighbor_mac[ETH_ALEN];
 	/* ...UUID... */
 	uint8_t neighbor_uuid[16];
+	/* primary state */
+	uint8_t neighbor_primary_state;
 	/* ...topocnt... */
 	uint32_t neighbor_topocnt;
 	/* ...and inhibition flag. This one is stored as-is using TTDP logic
@@ -220,6 +222,7 @@ struct lw_ttdp_port_priv {
 	uint8_t prev_neighbor_mac[ETH_ALEN];
 	uint8_t prev_neighbor_uuid[16];
 	uint32_t prev_neighbor_topocnt;
+	uint8_t prev_neighbor_primary_state;
 
 	/* String buffers to hold the string versions of some neighbor values. They
 	 * are only updated when the corresponding state var is read, and will be
@@ -258,6 +261,7 @@ struct ttdp_neighbor {
 	uint8_t neighbor_mac[ETH_ALEN];
 	uint8_t neighbor_uuid[16];
 	uint8_t neighbor_inhibition_state;
+	uint8_t neighbor_primary_state;
 };
 
 /* Structure for holding statistics hello frames and fast mode activation */
@@ -355,6 +359,7 @@ struct ab {
 	uint8_t port_statuses[4];
 	/* same as above but packed into one byte - used in outbound telegrams */
 	uint8_t port_statuses_b;
+	uint8_t partner_port_status;
 	/* copy of the above, used for comparisions and IPC updates */
 	uint8_t port_statuses_b_prev;
 	/* same as port_statuses, but whether we're distributing/blocking etc - NYI */
@@ -498,6 +503,12 @@ struct ab {
 	 * direction X of our in-consist neighbor. This is indicative of a mistake
 	 * in cabling, as the consist orientation becomes inconsistent. */
 	bool mixed_consist_orientation_detected;
+	/* Primary state is used for vlan reconfiguration for s4r by sending primary
+	 * state in hello messages to indicate that the link is a primary link for
+	 * the configuration. */
+	uint8_t primary_state_set;
+	uint8_t end_port_s4r;
+	bool is_s4r;
 };
 
 #endif

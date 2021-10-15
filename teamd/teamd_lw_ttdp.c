@@ -382,7 +382,8 @@ struct ttdp_hello_tlv {
 	u_int8_t inaugInhibition;			/* Inauguration inhibition status */
 	struct ether_addr remoteId;			/* Last known MAC of the neighbor on this line
 										 *  in this direction */
-	u_int16_t reserved2;				/* padding */
+	u_int8_t primaryLine;
+	u_int8_t reserved2;					/* padding, u_int16_t in iec61375, includes primaryLine */
 	u_int8_t cstUUid[16];				/* UUID of the local consist */
 } __attribute__((packed));
 
@@ -451,34 +452,58 @@ static const uint8_t ttdp_hello_destination_mac[6] =
 static struct ttdp_hello_tlv hello_data_storage[RINGBUF_SIZE] = {};
 static int hello_data_storage_next_idx = 0;
 
-static void dump_hello_frame(int i) {
+static void dump_hello_frame(bool is_s4r, int i) {
 	struct ttdp_hello_tlv* data = &(hello_data_storage[i]);
 	const char* antiv_str[] = {"ERR", "NO ", "YES", "UND"};
-	teamd_ttdp_log_info("HELLO %.2X:%.2X:%.2X:%.2X:%.2X:%.2X @ %u %c%d %s p:%d inh:%s recv:%s,%s,%s,%s",
-		data->srcId.ether_addr_octet[0],
-		data->srcId.ether_addr_octet[1],
-		data->srcId.ether_addr_octet[2],
-		data->srcId.ether_addr_octet[3],
-		data->srcId.ether_addr_octet[4],
-		data->srcId.ether_addr_octet[5],
-		data->lifeSign,
-		data->egressLine,
-		data->egressDir,
-		((data->timeoutSpeed == 1) ? ("SLOW") : ((data->timeoutSpeed == 2) ? ("FAST") : ("UNKN"))),
-		data->srcPortId,
-		antiv_str[data->inaugInhibition],
-		antiv_str[(data->recvStatuses & 0xc0) >> 6],
-		antiv_str[(data->recvStatuses & 0x30) >> 4],
-		antiv_str[(data->recvStatuses & 0x0c) >> 2],
-		antiv_str[(data->recvStatuses & 0x03) >> 0]
+
+	if (is_s4r) {
+		teamd_ttdp_log_info("HELLO %.2X:%.2X:%.2X:%.2X:%.2X:%.2X @ %u %c%d %u %s p:%d inh:%s recv:%s,%s,%s,%s",
+			data->srcId.ether_addr_octet[0],
+			data->srcId.ether_addr_octet[1],
+			data->srcId.ether_addr_octet[2],
+			data->srcId.ether_addr_octet[3],
+			data->srcId.ether_addr_octet[4],
+			data->srcId.ether_addr_octet[5],
+			data->lifeSign,
+			data->egressLine,
+			data->egressDir,
+			data->primaryLine,
+			((data->timeoutSpeed == 1) ? ("SLOW") : ((data->timeoutSpeed == 2) ? ("FAST") : ("UNKN"))),
+			data->srcPortId,
+			antiv_str[data->inaugInhibition],
+			antiv_str[(data->recvStatuses & 0xc0) >> 6],
+			antiv_str[(data->recvStatuses & 0x30) >> 4],
+			antiv_str[(data->recvStatuses & 0x0c) >> 2],
+			antiv_str[(data->recvStatuses & 0x03) >> 0]
 		);
+	} else {
+		teamd_ttdp_log_info("HELLO %.2X:%.2X:%.2X:%.2X:%.2X:%.2X @ %u %c%d %s p:%d inh:%s recv:%s,%s,%s,%s",
+			data->srcId.ether_addr_octet[0],
+			data->srcId.ether_addr_octet[1],
+			data->srcId.ether_addr_octet[2],
+			data->srcId.ether_addr_octet[3],
+			data->srcId.ether_addr_octet[4],
+			data->srcId.ether_addr_octet[5],
+			data->lifeSign,
+			data->egressLine,
+			data->egressDir,
+			((data->timeoutSpeed == 1) ? ("SLOW") : ((data->timeoutSpeed == 2) ? ("FAST") : ("UNKN"))),
+			data->srcPortId,
+			antiv_str[data->inaugInhibition],
+			antiv_str[(data->recvStatuses & 0xc0) >> 6],
+			antiv_str[(data->recvStatuses & 0x30) >> 4],
+			antiv_str[(data->recvStatuses & 0x0c) >> 2],
+			antiv_str[(data->recvStatuses & 0x03) >> 0]
+		);
+	}
 }
-static void dump_hello_frames() {
+
+static void dump_hello_frames(bool is_s4r) {
 	int i = hello_data_storage_next_idx;
 	int count = 0;
 	teamd_ttdp_log_info("--- BEGIN HELLO FRAME DUMP ---");
 	for (; count < RINGBUF_SIZE; count++, i = (i + 1) % RINGBUF_SIZE) {
-		dump_hello_frame(i);
+		dump_hello_frame(is_s4r, i);
 	}
 	teamd_ttdp_log_info("---- END HELLO FRAME DUMP ----");
 }
@@ -584,7 +609,8 @@ static bool get_overall_state(struct lw_ttdp_port_priv *ttdp_ppriv) {
 }
 
 static void update_neighbor(struct lw_ttdp_port_priv *ttdp_ppriv,
-	uint8_t* new_mac, uint8_t* new_uuid, uint32_t new_topocnt) {
+	uint8_t* new_mac, uint8_t* new_uuid, uint32_t new_topocnt, uint8_t new_primary_state) {
+	struct ab* p = ttdp_ppriv->start.common.ctx->runner_priv;
 	memcpy(ttdp_ppriv->prev_neighbor_uuid, ttdp_ppriv->neighbor_uuid,
 		sizeof(ttdp_ppriv->prev_neighbor_uuid));
 	memcpy(ttdp_ppriv->prev_neighbor_mac, ttdp_ppriv->neighbor_mac,
@@ -594,6 +620,10 @@ static void update_neighbor(struct lw_ttdp_port_priv *ttdp_ppriv,
 		sizeof(ttdp_ppriv->neighbor_uuid));
 	memcpy(ttdp_ppriv->neighbor_mac, new_mac,
 		sizeof(ttdp_ppriv->neighbor_mac));
+	if (p && p->is_s4r) {
+		ttdp_ppriv->prev_neighbor_primary_state = ttdp_ppriv->neighbor_primary_state;
+		ttdp_ppriv->neighbor_primary_state = new_primary_state;
+	}
 	ttdp_ppriv->neighbor_topocnt = new_topocnt;
 }
 
@@ -605,13 +635,18 @@ static void update_neighbor_to_none(struct lw_ttdp_port_priv *ttdp_ppriv) {
 		sizeof(ttdp_ppriv->prev_neighbor_mac));
 	ttdp_ppriv->prev_neighbor_topocnt = ttdp_ppriv->neighbor_topocnt;
 
+	struct ab* p = ttdp_ppriv->start.common.ctx->runner_priv;
+	if (p && p->is_s4r) {
+		ttdp_ppriv->prev_neighbor_primary_state = ttdp_ppriv->neighbor_primary_state;
+		ttdp_ppriv->neighbor_primary_state = 0;
+	}
+
 	memset(ttdp_ppriv->neighbor_uuid, 0, sizeof(ttdp_ppriv->neighbor_uuid));
 	memset(ttdp_ppriv->neighbor_mac, 0, sizeof(ttdp_ppriv->neighbor_mac));
 	ttdp_ppriv->neighbor_topocnt = 0;
 	ttdp_ppriv->neighbor_inhibit = TTDP_LOGIC_UNDEFINED;
 
 	teamd_ttdp_log_infox(ttdp_ppriv, "cleared neighbor");
-	struct ab* p = ttdp_ppriv->start.common.ctx->runner_priv;
 
 	if (p && ttdp_ppriv->line < TTDP_MAX_PORTS_PER_TEAM) {
 		memcpy(p->neighbors[ttdp_ppriv->line].neighbor_uuid, ttdp_ppriv->neighbor_uuid,
@@ -621,6 +656,8 @@ static void update_neighbor_to_none(struct lw_ttdp_port_priv *ttdp_ppriv) {
 		p->ifindex_by_line[ttdp_ppriv->line] = ttdp_ppriv->start.common.tdport->ifindex;
 		p->neighbors[ttdp_ppriv->line].neighbor_topocount = ttdp_ppriv->neighbor_topocnt;
 		p->neighbors[ttdp_ppriv->line].neighbor_inhibition_state = TTDP_LOGIC_UNDEFINED;
+		if (p->is_s4r)
+			p->neighbors[ttdp_ppriv->line].neighbor_primary_state = ttdp_ppriv->neighbor_primary_state;
 	} else {
 		/* Should never happen, leaving it here for future 4-line support */
 	}
@@ -675,11 +712,19 @@ static int lw_ttdp_load_options(struct teamd_context *ctx,
 	bool tmpb;
 	const char* tmpstr;
 	int err;
-	if (ctx->runner && ctx->runner->name && (strncmp("ttdp", ctx->runner->name, 5) != 0)) {
-		teamd_log_err("This linkwatcher requires the \"ttdp\" runner. Aborting.");
-		return 1;
-	}
 	struct ab* ab = ctx->runner_priv;
+
+	if (ab->is_s4r) {
+		if (ctx->runner && ctx->runner->name && (strncmp("ttdp_s4r", ctx->runner->name, 9) != 0)) {
+			teamd_log_err("This linkwatcher requires the \"ttdp_s4r\" runner. Aborting.");
+			return 1;
+		}
+	} else {
+		if (ctx->runner && ctx->runner->name && (strncmp("ttdp", ctx->runner->name, 5) != 0)) {
+			teamd_log_err("This linkwatcher requires the \"ttdp\" runner. Aborting.");
+			return 1;
+		}
+	}
 
 	if (ab == NULL) {
 		teamd_log_err("Configuration error");
@@ -799,7 +844,8 @@ static int lw_ttdp_load_options(struct teamd_context *ctx,
 	err = teamd_config_int_get(ctx, &tmp, "@.direction", cpcookie);
 	if (err) {
 		struct ab* ab = ctx->runner_priv;
-		if (ab && (ab->direction == 1 || ab->direction == 2)) {
+		if (ab && (ab->direction == 1 || ab->direction == 2) ||
+			(ab->is_s4r && (ab->direction == 3 || ab->direction == 4))) {
 			teamd_ttdp_log_infox(ttdp_ppriv, "Watcher direction not specified - using runner direction %d", ab->direction);
 			ttdp_ppriv->direction = ab->direction;
 		} else {
@@ -808,7 +854,7 @@ static int lw_ttdp_load_options(struct teamd_context *ctx,
 		}
 	} else {
 		if (tmp != 1 && tmp != 2) {
-			teamd_log_err("TTDP: Error, invalid direction - use 1 or 2");
+			teamd_log_err("TTDP: Error, invalid direction - use 1 or 2 for iec61375 and 1-4 for s4r");
 			return 1;
 		}
 		ttdp_ppriv->direction = tmp;
@@ -1019,8 +1065,6 @@ static void construct_default_frame(struct ab* parent, struct lw_ttdp_port_priv 
 		return;
 	}
 
-
-
 	/* Ethernet header & VLAN */
 	memcpy(&(out->frame_header.ether_header.ether_dhost), ttdp_hello_destination_mac, 6);
 	memcpy(&(out->frame_header.ether_header.ether_shost), source_addr.sll_addr, 6);
@@ -1052,7 +1096,11 @@ static void construct_default_frame(struct ab* parent, struct lw_ttdp_port_priv 
 	memcpy(&(out->hello_tlv.oui), ttdp_hello_tlv_oui, 3);
 	out->hello_tlv.ttdpSubtype = 0x01;
 	out->hello_tlv.tlvCS = 0; /* Calculated in lw_ttdp_send() / lw_ttdp_send_fast() */
-	out->hello_tlv.version = htonl(0x01000000);
+	if (parent->is_s4r)
+		out->hello_tlv.version = htonl(0x02000000);
+	else
+		out->hello_tlv.version = htonl(0x01000000);
+
 	out->hello_tlv.lifeSign = htonl((ttdp_ppriv->lifesign)++);
 	out->hello_tlv.etbTopoCnt = htonl(parent->etb_topo_counter);
 
@@ -1062,7 +1110,11 @@ static void construct_default_frame(struct ab* parent, struct lw_ttdp_port_priv 
 		sizeof(ttdp_ppriv->vendor_info)));
 	out->hello_tlv.vendor[sizeof(out->hello_tlv.vendor)-1] = 0;
 
-	out->hello_tlv.recvStatuses = parent->port_statuses_b;
+	if(parent->is_s4r)
+		out->hello_tlv.recvStatuses = parent->port_statuses_b & parent->partner_port_status;
+	else
+		out->hello_tlv.recvStatuses = parent->port_statuses_b;
+
 	out->hello_tlv.timeoutSpeed = 0; /* Set in lw_ttdp_send() / lw_ttdp_send_fast() */
 	//memcpy(&(out->hello_tlv.srcId), source_addr.sll_addr, 6);
 	/* FIXME check sizes of these */
@@ -1070,7 +1122,11 @@ static void construct_default_frame(struct ab* parent, struct lw_ttdp_port_priv 
 
 	out->hello_tlv.srcPortId = (ttdp_ppriv->start.common.tdport->ifindex + 1),
 	out->hello_tlv.egressLine = 0x41 + ttdp_ppriv->line;
-	out->hello_tlv.egressDir = ttdp_ppriv->direction;
+
+	if(parent->is_s4r)
+		out->hello_tlv.egressDir = ((ttdp_ppriv->direction - 1) % 2) + 1;
+	else
+		out->hello_tlv.egressDir = ttdp_ppriv->direction;
 
 	uint8_t inhibit_any = (parent->inhibition_flag_local | parent->inhibition_flag_any);
 	out->hello_tlv.inaugInhibition = inhibit_any;// | parent->inhibition_flag_remote);
@@ -1080,6 +1136,11 @@ static void construct_default_frame(struct ab* parent, struct lw_ttdp_port_priv 
 	if (out->hello_tlv.inaugInhibition != TTDP_LOGIC_FALSE)
 		out->hello_tlv.inaugInhibition = TTDP_LOGIC_TRUE;
 	memcpy(&(out->hello_tlv.remoteId), ttdp_ppriv->neighbor_mac, 6);
+	if (parent->is_s4r)
+		out->hello_tlv.primaryLine = parent->primary_state_set;
+	else
+		out->hello_tlv.primaryLine = 0;
+
 	out->hello_tlv.reserved2 = 0;
 	memcpy(&(out->hello_tlv.cstUUid), ttdp_ppriv->local_uuid, 16);
 
@@ -1100,16 +1161,19 @@ static int ttdp_verify_checksum(struct ttdp_hello_tlv* tlv, struct lw_ttdp_port_
 	size_t checksummed_length =
 		((uint8_t*)&(tlv->cstUUid)+sizeof(tlv->cstUUid)) - (uint8_t*)&(tlv->version);
 	uint16_t calc = frame_checksum((uint8_t*)&(tlv->version), checksummed_length);
+	struct ab* p = ttdp_ppriv->start.common.ctx->runner_priv;
+	u_int32_t version = (p && p->is_s4r) ? 0x02000000 : 0x01000000;
+
 	if (calc != ntohs(tlv->tlvCS)) {
 		teamd_ttdp_log_infox(ttdp_ppriv, "HELLO TLV checksum mismatch: got %04hX, expected %04hX", tlv->tlvCS, calc);
 		return 1;
 	}
 
 	/* FIXME move this out? */
-	if ((ntohl(tlv->version) & 0xFF000000) != 0x01000000) {
+	if ((ntohl(tlv->version) & 0xFF000000) != version) {
 		teamd_ttdp_log_infox(ttdp_ppriv, "HELLO TLV version mismatch: got %08" PRIX32 ", expected %08"
 			PRIX32 " (only first byte matters)",
-			(ntohl(tlv->version)), 0x01000000);
+			(ntohl(tlv->version)), version);
 		return 2;
 	}
 
@@ -1436,6 +1500,8 @@ static void set_neigh_hears_us(struct teamd_context *ctx, struct lw_ttdp_port_pr
 static int lw_ttdp_receive(struct teamd_context *ctx, int events, void *priv) {
 	struct lw_ttdp_port_priv* ttdp_ppriv = (struct lw_ttdp_port_priv*)priv;
 	static struct ttdp_hello_tlv hello_recv;
+	uint8_t primary_line;
+	uint8_t primary_state;
 	//fprintf(stderr, "ttdp lw: lw_ttdp_receive\n");
 
 	/* Receive and parse TTDP HELLO message here */
@@ -1557,9 +1623,18 @@ static int lw_ttdp_receive(struct teamd_context *ctx, int events, void *priv) {
 
 		store_hello_frame(&hello_recv);
 
-		/* do necessary processing; store prev_neighbor; notify the runner of changes */
-		update_neighbor(ttdp_ppriv, hello_recv.srcId.ether_addr_octet, hello_recv.cstUUid, hello_recv.etbTopoCnt);
+		if (ab->is_s4r) {
+			primary_line = (hello_recv.primaryLine >> (6 - 2 * (hello_recv.egressLine - 'A')))  & 3;
+			primary_state = (primary_line == TTDP_LOGIC_TRUE) ? 1 : 0;
 
+			/* do necessary processing; store prev_neighbor; notify the runner of changes */
+			update_neighbor(ttdp_ppriv, hello_recv.srcId.ether_addr_octet,
+						hello_recv.cstUUid,
+						hello_recv.etbTopoCnt,
+						primary_state);
+		} else {
+			update_neighbor(ttdp_ppriv, hello_recv.srcId.ether_addr_octet, hello_recv.cstUUid, hello_recv.etbTopoCnt, 0);
+		}
 		int notify = 0;
 		if ((memcmp(ttdp_ppriv->neighbor_uuid, ttdp_ppriv->prev_neighbor_uuid,
 			sizeof(ttdp_ppriv->neighbor_uuid)) != 0)
@@ -1598,6 +1673,19 @@ static int lw_ttdp_receive(struct teamd_context *ctx, int events, void *priv) {
 			struct ab *p = (struct ab*)ctx->runner_priv;
 			if (p && ttdp_ppriv->line < TTDP_MAX_PORTS_PER_TEAM) {
 				p->neighbors[ttdp_ppriv->line].neighbor_topocount = ttdp_ppriv->neighbor_topocnt;
+			} else {
+				/* Should never happen, leaving it here for future 4-line support */
+			}
+			notify = 1;
+		}
+
+		if (ab && ab->is_s4r && ttdp_ppriv->neighbor_primary_state != ttdp_ppriv->prev_neighbor_primary_state) {
+			teamd_ttdp_log_infox(ttdp_ppriv, "Neighbor has new primary state! %08X -> %08X",
+								 ttdp_ppriv->prev_neighbor_primary_state, ttdp_ppriv->neighbor_primary_state);
+			struct ab *p = (struct ab*)ctx->runner_priv;
+			if (p && ttdp_ppriv->line <= TTDP_MAX_PORTS_PER_TEAM) {
+				p->neighbors[ttdp_ppriv->line].neighbor_primary_state = ttdp_ppriv->neighbor_primary_state;
+				p->prev_neighbors[ttdp_ppriv->line].neighbor_primary_state = ttdp_ppriv->prev_neighbor_primary_state;
 			} else {
 				/* Should never happen, leaving it here for future 4-line support */
 			}
@@ -2103,9 +2191,10 @@ static int lw_ttdp_vendor_info_get(struct teamd_context *ctx,
 static int lw_ttdp_dump_frames_set(struct teamd_context *ctx,
 					 struct team_state_gsc *gsc,
 					 void *priv) {
+	struct ab *p = (struct ab*)ctx->runner_priv;
 	//struct lw_ttdp_port_priv* ttdp_ppriv = priv;
 	if (gsc && gsc->data.int_val > 0) {
-		dump_hello_frames();
+		dump_hello_frames(p && p->is_s4r);
 	} else {
 		hello_data_storage_next_idx++;
 	}
@@ -2456,6 +2545,19 @@ static const struct teamd_state_val lw_ttdp_state_vals[] = {
 
 const struct teamd_link_watch teamd_link_watch_ttdp = {
 	.name			= "ttdp",
+	.state_vg		= {
+		.vals		= lw_ttdp_state_vals,
+		.vals_count	= ARRAY_SIZE(lw_ttdp_state_vals),
+	},
+	.port_priv = {
+		.init		= lw_ttdp_port_added,
+		.fini		= lw_ttdp_port_removed,
+		.priv_size	= sizeof(struct lw_ttdp_port_priv),
+	},
+};
+
+const struct teamd_link_watch teamd_link_watch_ttdp_s4r = {
+	.name			= "ttdp_s4r",
 	.state_vg		= {
 		.vals		= lw_ttdp_state_vals,
 		.vals_count	= ARRAY_SIZE(lw_ttdp_state_vals),

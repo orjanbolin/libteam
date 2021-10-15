@@ -405,7 +405,8 @@ static uint8_t update_aggregate_state(struct teamd_context *ctx,
 	uint8_t inaugurated = ab->inaugurated;
 	uint8_t inhibit_any = (ab->inhibition_flag_local | ab->inhibition_flag_any);
 	uint8_t inhibit = ((inhibit_any & TTDP_LOGIC_TRUE) != 0);
-	uint8_t mid = (ab->receiving_topology_frames) && !(is_neighbor_none(&ab->elected_neighbor));
+	uint8_t mid = (ab->is_s4r && !(ab->end_port_s4r)) ||
+							!(ab->is_s4r) && (ab->receiving_topology_frames) && !(is_neighbor_none(&ab->elected_neighbor));
 	uint8_t end = !(mid);
 
 	teamd_ttdp_log_infox(ctx->team_devname, "update state curr %d inaug %d inhibit %d "
@@ -884,7 +885,8 @@ static int elect_neighbor(struct teamd_context *ctx, struct ab *ab, uint8_t *nex
 			uint8_t internal_next_port_state[TTDP_MAX_PORTS_PER_TEAM];
 			int ignore_candidate = -1;
 			int candidate_suggestion;
-			for (candidate_suggestion = 0; candidate_suggestion < ctx->port_obj_list_count;
+			int port_max = ab->is_s4r ? TTDP_MAX_PORTS_PER_TEAM : ctx->port_obj_list_count;
+			for (candidate_suggestion = 0; candidate_suggestion < port_max;
 				++candidate_suggestion) {
 				bool currently_active = (ab->active_ifindex == candidate_suggestion);
 				bool has_changed =
@@ -917,7 +919,7 @@ static int elect_neighbor(struct teamd_context *ctx, struct ab *ab, uint8_t *nex
 					);
 				int i;
 				/* one (itself) will always agree, but this makes for simpler code... */
-				for (i = 0; i < ctx->port_obj_list_count; ++i) {
+				for (i = 0; i < port_max; ++i) {
 					if (i == ignore_candidate)
 						continue;
 					if ((memcmp(candidate_mac, ab->neighbors[i].neighbor_mac, sizeof(candidate_mac)) != 0)
@@ -1010,16 +1012,25 @@ static int elect_neighbor(struct teamd_context *ctx, struct ab *ab, uint8_t *nex
 				sizeof(ab->elected_neighbor.neighbor_uuid));
 			/* store winner topocnt */
 			ab->elected_neighbor.neighbor_topocount = ab->neighbors[candidate_suggestion].neighbor_topocount;
+			if (ab->is_s4r) {
+				/* store primary state */
+				ab->elected_neighbor.neighbor_primary_state = ab->neighbors[candidate_suggestion].neighbor_primary_state;
+			}
 
 			/* check if the new neighbor has a different inhibition flag */
 			remote_inhibition_update(ctx, ab);
+
+			uint8_t update_s4r = 0;
+			if (ab->is_s4r)
+				update_s4r = ab->elected_neighbor.neighbor_primary_state != ab->prev_elected_neighbor.neighbor_primary_state;
 
 			/* update previous MAC and/or uuid */
 			if (
 				(memcmp(ab->elected_neighbor.neighbor_mac, ab->prev_elected_neighbor.neighbor_mac,
 				sizeof(ab->elected_neighbor.neighbor_mac)) != 0)
 				|| (memcmp(ab->elected_neighbor.neighbor_uuid, ab->prev_elected_neighbor.neighbor_uuid,
-				sizeof(ab->elected_neighbor.neighbor_uuid)) != 0)
+				sizeof(ab->elected_neighbor.neighbor_uuid)) != 0
+				|| update_s4r)
 				)
 			{
 				memcpy(ab->prev_elected_neighbor.neighbor_mac, ab->elected_neighbor.neighbor_mac,
@@ -1027,6 +1038,8 @@ static int elect_neighbor(struct teamd_context *ctx, struct ab *ab, uint8_t *nex
 				memcpy(ab->prev_elected_neighbor.neighbor_uuid, ab->elected_neighbor.neighbor_uuid,
 					sizeof(ab->elected_neighbor.neighbor_uuid));
 				ab->prev_elected_neighbor.neighbor_topocount = ab->elected_neighbor.neighbor_topocount;
+				if (ab->is_s4r)
+					ab->prev_elected_neighbor.neighbor_primary_state = ab->elected_neighbor.neighbor_primary_state;
 				return 1;
 			} else {
 				return 0;
@@ -1062,7 +1075,11 @@ static int ab_link_watch_handler_internal(struct teamd_context *ctx, struct ab *
 				/* Notify tcnd that something has changed */
 
 				//if (ab->silent == TTDP_NOT_SILENT) {
-					lag_state_write_elected_neighbor(ctx, ab);
+					lag_state_write_elected_neighbor_mac(ctx, ab);
+					if (ab->is_s4r) {
+						lag_state_write_elected_neighbor_uuid(ctx, ab);
+						lag_state_write_elected_neighbor_primary_state(ctx, ab);
+					}
 				//}
 				/* FIXME */
 				teamd_ttdp_log_infox(ctx->team_devname, "Wrote elected neighbor state file.");
@@ -1110,7 +1127,11 @@ static int ab_link_watch_handler_internal(struct teamd_context *ctx, struct ab *
 
 		/* Notify tcnd that something has changed */
 		teamd_ttdp_log_infox(ctx->team_devname, "Writing elected neighbor to state file.");
-		lag_state_write_elected_neighbor(ctx, ab);
+		lag_state_write_elected_neighbor_mac(ctx, ab);
+		if (ab->is_s4r) {
+			lag_state_write_elected_neighbor_uuid(ctx, ab);
+			lag_state_write_elected_neighbor_primary_state(ctx, ab);
+		}
 	}
 
 	teamd_ttdp_log_dbgx(ctx->team_devname, "AGREE mode %d count %d %d", ab->neighbor_agreement_mode,
@@ -1566,9 +1587,17 @@ static int ab_state_active_port_set(struct teamd_context *ctx,
 
 static int send_tcnd_update_message_work(struct teamd_context *ctx,
 				      struct teamd_workq *workq) {
+	int return_value;
 	struct ab *ab;
+	struct ab *p = (struct ab*)ctx->runner_priv;
 	ab = get_container(workq, struct ab, link_watch_handler_workq);
-	return lag_state_write_elected_neighbor(ctx, ab);
+	return_value = lag_state_write_elected_neighbor_mac(ctx, ab);
+	if (p && p->is_s4r) {
+		return_value =	return_value |
+										lag_state_write_elected_neighbor_uuid(ctx, ab) |
+										lag_state_write_elected_neighbor_primary_state(ctx, ab);
+	}
+	return return_value;
 }
 
 static int link_state_update_work(struct teamd_context *ctx,
@@ -1901,7 +1930,11 @@ static int ttdp_neighbor_data_req_set(struct teamd_context *ctx,
 				    void *priv) {
 	struct ab *ab = priv;
 	teamd_ttdp_log_infox(ctx->team_devname, "Neighbor data update requested by statevar");
-	lag_state_write_elected_neighbor(ctx, ab);
+	lag_state_write_elected_neighbor_mac(ctx, ab);
+	if (ab->is_s4r) {
+		lag_state_write_elected_neighbor_uuid(ctx, ab);
+		lag_state_write_elected_neighbor_primary_state(ctx, ab);
+	}
 	return 0;
 }
 static int ttdp_etb_topocount_get(struct teamd_context *ctx,
@@ -2119,6 +2152,74 @@ static int ttdp_stats_topo_frames_out_get(struct teamd_context *ctx,
 	return 0;
 }
 
+static int ttdp_primary_state_set(struct teamd_context *ctx,
+					struct team_state_gsc *gsc,
+					void* priv)
+{
+	struct ab *ab = priv;
+	ab->primary_state_set = gsc->data.int_val;
+	teamd_ttdp_log_infox(ctx->team_devname, "Set primary value to %d from statevar",
+		ab->primary_state_set);
+	return 0;
+}
+
+static int ab_neighbor_etbn_primary_flags_get(struct teamd_context *ctx,
+					      struct team_state_gsc *gsc,
+					      void *priv) {
+	struct ab *ab = priv;
+	gsc->data.int_val = ab->elected_neighbor.neighbor_primary_state;
+	return 0;
+}
+
+static int ttdp_partner_port_status_get(struct teamd_context *ctx,
+					struct team_state_gsc *gsc,
+					void* priv)
+{
+	struct ab *ab = priv;
+	gsc->data.int_val = ab->partner_port_status;
+	return 0;
+}
+
+static int ttdp_partner_port_status_set(struct teamd_context *ctx,
+					struct team_state_gsc *gsc,
+					void* priv)
+{
+	struct ab *ab = priv;
+	ab->partner_port_status = gsc->data.int_val;
+	teamd_ttdp_log_infox(ctx->team_devname, "Set partner_port_status value to %x from statevar",
+		ab->partner_port_status);
+	return 0;
+}
+
+static int ttdp_end_port_s4r_get(struct teamd_context *ctx,
+					struct team_state_gsc *gsc,
+					void* priv)
+{
+	struct ab *ab = priv;
+	gsc->data.int_val = ab->end_port_s4r;
+	return 0;
+}
+
+static int ttdp_end_port_s4r_set(struct teamd_context *ctx,
+					struct team_state_gsc *gsc,
+					void* priv)
+{
+	struct ab *ab = priv;
+	ab->end_port_s4r = gsc->data.int_val;
+	teamd_ttdp_log_infox(ctx->team_devname, "Set end port s4r value to %x from statevar",
+		ab->end_port_s4r);
+	return 0;
+}
+
+static int ttdp_primary_state_get(struct teamd_context *ctx,
+					struct team_state_gsc *gsc,
+					void* priv)
+{
+	struct ab *ab = priv;
+	gsc->data.int_val = ab->primary_state_set;
+	return 0;
+}
+
 static const struct teamd_state_val ab_state_vals[] = {
 	/* Currently active port. Only meaningful in activebackup mode. Read-write.
 	 */
@@ -2167,6 +2268,13 @@ static const struct teamd_state_val ab_state_vals[] = {
 		.type = TEAMD_STATE_ITEM_TYPE_STRING,
 		.getter = ab_neighbor_etbn_topocnt_get,
 		.setter = ttdp_runner_noop_setter,
+	},
+	/* Elected neighbor’s primary flag, as received by us */
+	{
+		.subpath = "neighbor_primary_flags",
+		.type = TEAMD_STATE_ITEM_TYPE_INT,
+		.getter = ab_neighbor_etbn_primary_flags_get,
+		.setter = ttdp_runner_noop_setter
 	},
 	/* MAC of the previously elected and saved neighbor, in string format.
 	 * Only meaningful when inhibited; neighbor data is saved on the positive
@@ -2391,6 +2499,24 @@ static const struct teamd_state_val ab_state_vals[] = {
 		.type = TEAMD_STATE_ITEM_TYPE_UINT32,
 		.getter = ttdp_stats_topo_frames_in_get,
 	        .setter = ttdp_stats_topo_frames_in_set
+	},
+	{
+		.subpath = "primary_state_set",
+		.type = TEAMD_STATE_ITEM_TYPE_INT,
+		.getter = ttdp_primary_state_get,
+		.setter = ttdp_primary_state_set
+	},
+	{
+		.subpath = "partner_port_status_set",
+		.type = TEAMD_STATE_ITEM_TYPE_INT,
+		.getter = ttdp_partner_port_status_get,
+		.setter = ttdp_partner_port_status_set
+	},
+	{
+		.subpath = "end_port_s4r_set",
+		.type = TEAMD_STATE_ITEM_TYPE_INT,
+		.getter = ttdp_end_port_s4r_get,
+		.setter = ttdp_end_port_s4r_set
 	}
 };
 
@@ -2627,7 +2753,7 @@ static int open_parasite_socket(struct teamd_context *ctx, struct ab *ab) {
 	return 0;
 }
 
-static int ab_init(struct teamd_context *ctx, void *priv)
+static int _ab_init(struct teamd_context *ctx, void *priv)
 {
 	struct ab *ab = priv;
 	int err;
@@ -2687,12 +2813,15 @@ static int ab_init(struct teamd_context *ctx, void *priv)
 	memset(ab->port_statuses, 3, 4);
 	ab->etb_topo_counter = 0xFFFFFFFF;
 	ab->port_statuses_b = 0xFF;
+	ab->partner_port_status = 0xFF;
 	ab->inhibition_flag_local = 0;
 	ab->inhibition_flag_any = 0;
 	ab->inhibition_flag_neighbor = 0;
 	ab->inhibition_flag_remote_consist = 0;
 	ab->aggregate_status = TTDP_AGG_STATE_DEFAULT;
 	ab->remote_inhibition_actual = 3;
+	ab->primary_state_set = 0x50; /*TTDP_FALSE, TTDP_FALSE, 0b00, 0b00*/
+	ab->end_port_s4r = 1;
 	memset(&ab->lines_hello_stats[0], 0, sizeof(ab->lines_hello_stats));
 
 	memset(ab->neighbor_lines, '-', sizeof(ab->neighbor_lines));
@@ -2745,6 +2874,20 @@ event_watch_unregister:
 	return err;
 }
 
+static int ab_init(struct teamd_context *ctx, void *priv)
+{
+	struct ab *ab = priv;
+	ab->is_s4r = false;
+	_ab_init(ctx, priv);
+}
+
+static int ab_init_s4r(struct teamd_context *ctx, void *priv)
+{
+	struct ab *ab = priv;
+	ab->is_s4r = true;
+	_ab_init(ctx, priv);
+}
+
 static void ab_fini(struct teamd_context *ctx, void *priv)
 {
 	struct ab *ab = priv;
@@ -2778,5 +2921,17 @@ const struct teamd_runner teamd_runner_ttdp = {
 #endif
 	.priv_size		= sizeof(struct ab),
 	.init			= ab_init,
+	.fini			= ab_fini,
+};
+
+const struct teamd_runner teamd_runner_ttdp_s4r = {
+	.name			= "ttdp_s4r",
+#ifdef MODE_ACTIVEBACKUP
+	.team_mode_name	= "activebackup",
+#else
+	.team_mode_name	= "random",
+#endif
+	.priv_size		= sizeof(struct ab),
+	.init			= ab_init_s4r,
 	.fini			= ab_fini,
 };
