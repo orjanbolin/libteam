@@ -714,6 +714,11 @@ static int lw_ttdp_load_options(struct teamd_context *ctx,
 	int err;
 	struct ab* ab = ctx->runner_priv;
 
+	if (ab == NULL) {
+		teamd_log_err("Configuration error");
+		return 1;
+	}
+
 	if (ab->is_s4r) {
 		if (ctx->runner && ctx->runner->name && (strncmp("ttdp_s4r", ctx->runner->name, 9) != 0)) {
 			teamd_log_err("This linkwatcher requires the \"ttdp_s4r\" runner. Aborting.");
@@ -724,11 +729,6 @@ static int lw_ttdp_load_options(struct teamd_context *ctx,
 			teamd_log_err("This linkwatcher requires the \"ttdp\" runner. Aborting.");
 			return 1;
 		}
-	}
-
-	if (ab == NULL) {
-		teamd_log_err("Configuration error");
-		return 1;
 	}
 
 	err = teamd_config_int_get(ctx, &tmp, "@.initial_mode", cpcookie);
@@ -844,8 +844,8 @@ static int lw_ttdp_load_options(struct teamd_context *ctx,
 	err = teamd_config_int_get(ctx, &tmp, "@.direction", cpcookie);
 	if (err) {
 		struct ab* ab = ctx->runner_priv;
-		if (ab && (ab->direction == 1 || ab->direction == 2) ||
-			(ab->is_s4r && (ab->direction == 3 || ab->direction == 4))) {
+		if (ab && ((ab->direction == 1 || ab->direction == 2) ||
+			(ab->is_s4r && (ab->direction == 3 || ab->direction == 4)))) {
 			teamd_ttdp_log_infox(ttdp_ppriv, "Watcher direction not specified - using runner direction %d", ab->direction);
 			ttdp_ppriv->direction = ab->direction;
 		} else {
@@ -1679,7 +1679,7 @@ static int lw_ttdp_receive(struct teamd_context *ctx, int events, void *priv) {
 			notify = 1;
 		}
 
-		if (ab && ab->is_s4r && ttdp_ppriv->neighbor_primary_state != ttdp_ppriv->prev_neighbor_primary_state) {
+		if (ab->is_s4r && ttdp_ppriv->neighbor_primary_state != ttdp_ppriv->prev_neighbor_primary_state) {
 			teamd_ttdp_log_infox(ttdp_ppriv, "Neighbor has new primary state! %08X -> %08X",
 								 ttdp_ppriv->prev_neighbor_primary_state, ttdp_ppriv->neighbor_primary_state);
 			struct ab *p = (struct ab*)ctx->runner_priv;

@@ -2878,14 +2878,14 @@ static int ab_init(struct teamd_context *ctx, void *priv)
 {
 	struct ab *ab = priv;
 	ab->is_s4r = false;
-	_ab_init(ctx, priv);
+	return _ab_init(ctx, priv);
 }
 
 static int ab_init_s4r(struct teamd_context *ctx, void *priv)
 {
 	struct ab *ab = priv;
 	ab->is_s4r = true;
-	_ab_init(ctx, priv);
+	return _ab_init(ctx, priv);
 }
 
 static void ab_fini(struct teamd_context *ctx, void *priv)
