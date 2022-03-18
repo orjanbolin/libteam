@@ -1007,6 +1007,14 @@ static int elect_neighbor(struct teamd_context *ctx, struct ab *ab, uint8_t *nex
 			/* store winner mac */
 			memcpy(ab->elected_neighbor.neighbor_mac, ab->neighbors[candidate_suggestion].neighbor_mac,
 				sizeof(ab->elected_neighbor.neighbor_mac));
+			/* Update neighbor mac statefile */
+			/* Notify the rest of the stack that something has changed */
+			lag_state_write_elected_neighbor_mac(ctx, ab);
+			if (ab->is_s4r) {
+				lag_state_write_elected_neighbor_uuid(ctx, ab);
+				lag_state_write_elected_neighbor_primary_state(ctx, ab);
+			}
+			teamd_ttdp_log_infox(ctx->team_devname, "Writing elected neighbor to state file.");
 			/* store winner uuid */
 			memcpy(ab->elected_neighbor.neighbor_uuid, ab->neighbors[candidate_suggestion].neighbor_uuid,
 				sizeof(ab->elected_neighbor.neighbor_uuid));
@@ -1069,22 +1077,8 @@ static int ab_link_watch_handler_internal(struct teamd_context *ctx, struct ab *
 		 * add links that have come up to the aggregate, but we do elect neighbors. */
 		if (ab->aggregate_status == TTDP_AGG_STATE_FIXED_END) {
 			teamd_ttdp_log_infox(ctx->team_devname, "Linkwatch handler update in FIXED END mode...");
-			/* Neighbor data is automatically set by my ports. Perform election
-			 * and notify tcnd if it's changed. */
-			if (elect_neighbor(ctx, ab, ab->neighbor_agreement) != 0) {
-				/* Notify tcnd that something has changed */
-
-				//if (ab->silent == TTDP_NOT_SILENT) {
-					lag_state_write_elected_neighbor_mac(ctx, ab);
-					if (ab->is_s4r) {
-						lag_state_write_elected_neighbor_uuid(ctx, ab);
-						lag_state_write_elected_neighbor_primary_state(ctx, ab);
-					}
-				//}
-				/* FIXME */
-				teamd_ttdp_log_infox(ctx->team_devname, "Wrote elected neighbor state file.");
-			}
-
+			/* Neighbor data is automatically set by my ports. Perform election. */
+			elect_neighbor(ctx, ab, ab->neighbor_agreement);
 			update_aggregate_state(ctx, ab);
 			return 0;
 		}
@@ -1119,19 +1113,10 @@ static int ab_link_watch_handler_internal(struct teamd_context *ctx, struct ab *
 		}
 	}
 
-	/* Neighbor data is automatically set by my ports. Perform election
-	 * and notify tcnd if it's changed. */
+	/* Neighbor data is automatically set by my ports. Perform election. */
 	if (elect_neighbor(ctx, ab, ab->neighbor_agreement) != 0) {
 		if (allow_update_aggregate_state)
 			update_aggregate_state(ctx, ab);
-
-		/* Notify tcnd that something has changed */
-		teamd_ttdp_log_infox(ctx->team_devname, "Writing elected neighbor to state file.");
-		lag_state_write_elected_neighbor_mac(ctx, ab);
-		if (ab->is_s4r) {
-			lag_state_write_elected_neighbor_uuid(ctx, ab);
-			lag_state_write_elected_neighbor_primary_state(ctx, ab);
-		}
 	}
 
 	teamd_ttdp_log_dbgx(ctx->team_devname, "AGREE mode %d count %d %d", ab->neighbor_agreement_mode,
