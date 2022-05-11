@@ -425,7 +425,7 @@ static uint8_t update_aggregate_state(struct teamd_context *ctx,
 				memorize_neighbor(ctx, ab);
 				next = TTDP_AGG_STATE_FIXED_END;
 				break;
-			} else if (!end) {
+			} else if (mid) {
 				next = TTDP_AGG_STATE_FLOATING_MIDDLE;
 				forget_neighbor(ctx, ab);
 				break;
@@ -443,9 +443,7 @@ static uint8_t update_aggregate_state(struct teamd_context *ctx,
 			break;
 		case TTDP_AGG_STATE_FIXED_END:
 			if (!inhibit) {
-				/* if a node was discovered while we were gone, we need to become a
-				 * middle node */
-				if (!is_neighbor_none(&ab->elected_neighbor)) {
+				if (mid) {
 					teamd_ttdp_log_infox(ctx->team_devname,
 						"Inhibit lifted, not end node anymore");
 					next = TTDP_AGG_STATE_FLOATING_MIDDLE;
