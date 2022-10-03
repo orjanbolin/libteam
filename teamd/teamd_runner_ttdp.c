@@ -994,9 +994,11 @@ static int elect_neighbor(struct teamd_context *ctx, struct ab *ab, uint8_t *nex
 			memcpy(&candidate_last, candidate_mac + 4, 2);
 			if (candidate_first == 0 && candidate_last == 0) {
 				ab->neighbor_is_none = 1;
+				team_carrier_set(ctx->th, false);
 				teamd_ttdp_log_infox(ctx->team_devname, "Null-MAC set as neighbor.");
 			} else {
 				ab->neighbor_is_none = 0;
+				team_carrier_set(ctx->th, true);
 			}
 
 			lag_state_write_diag_crossed_lines_detected(ctx, ab);
