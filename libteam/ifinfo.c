@@ -189,8 +189,8 @@ static void update_phys_port_id(struct team_ifinfo *ifinfo,
 static void ifinfo_update(struct team_ifinfo *ifinfo, struct rtnl_link *link)
 {
 	update_ifname(ifinfo, link);
-	update_master(ifinfo, link);
 	update_hwaddr(ifinfo, link);
+	update_master(ifinfo, link);
 	update_phys_port_id(ifinfo, link);
 	update_admin_state(ifinfo, link);
 }
