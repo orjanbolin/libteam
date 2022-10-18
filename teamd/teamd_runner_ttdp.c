@@ -766,33 +766,7 @@ static int ab_set_active_port(struct teamd_context *ctx, struct ab *ab,
 		//return err;
 	}
 #endif
-/* Define MODE_ACTIVEBACKUP to have the behavior below. If not defined, we only
- * change active ports following elections and/or port state changes */
-#ifdef MODE_ACTIVEBACKUP
-	err = team_set_active_port(ctx->th, tdport->ifindex);
-	if (err) {
-		teamd_log_err("%s: Failed to set as active port.",
-			      tdport->ifname);
-		//goto err_set_active_port;
-	}
-	if (ab->hwaddr_policy->active_set) {
-		err =  ab->hwaddr_policy->active_set(ctx, ab, tdport);
-		//if (err)
-			//goto err_hwaddr_policy_active_set;
-	}
-	ab->active_ifindex = tdport->ifindex;
-	teamd_ttdp_log_infox(ctx->team_devname, "Changed active port to \"%s\".", tdport->ifname);
 	return 0;
-
-err_set_active_port:
-err_hwaddr_policy_active_set:
-#ifdef SET_PORT_ENABLED_DISABLED
-	team_set_port_enabled(ctx->th, tdport->ifindex, false);
-#endif
-	return err;
-#else
-	return 0;
-#endif
 }
 
 struct ab_port_state_info {
@@ -2899,11 +2873,7 @@ static void ab_fini(struct teamd_context *ctx, void *priv)
 
 const struct teamd_runner teamd_runner_ttdp = {
 	.name			= "ttdp",
-#ifdef MODE_ACTIVEBACKUP
-	.team_mode_name	= "activebackup",
-#else
-	.team_mode_name	= "random",
-#endif
+	.team_mode_name	= "loadbalance",
 	.priv_size		= sizeof(struct ab),
 	.init			= ab_init,
 	.fini			= ab_fini,
@@ -2911,11 +2881,7 @@ const struct teamd_runner teamd_runner_ttdp = {
 
 const struct teamd_runner teamd_runner_ttdp_s4r = {
 	.name			= "ttdp_s4r",
-#ifdef MODE_ACTIVEBACKUP
-	.team_mode_name	= "activebackup",
-#else
-	.team_mode_name	= "random",
-#endif
+	.team_mode_name	= "loadbalance",
 	.priv_size		= sizeof(struct ab),
 	.init			= ab_init_s4r,
 	.fini			= ab_fini,
