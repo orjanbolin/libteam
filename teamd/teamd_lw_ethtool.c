@@ -151,6 +151,11 @@ static int lw_ethtool_port_added(struct teamd_context *ctx,
 		teamd_log_err("Failed add delay callback timer");
 		return err;
 	}
+	teamd_loop_callback_enable(ctx, LW_ETHTOOL_DELAY_CB_NAME, priv);
+	err = teamd_loop_callback_timer_set(ctx, LW_ETHTOOL_DELAY_CB_NAME,
+					    priv, NULL, NULL);
+	if (err)
+		teamd_log_err("Failed to trigger initial port event.");
 	err = teamd_event_watch_register(ctx, &lw_ethtool_port_watch_ops, priv);
 	if (err) {
 		teamd_log_err("Failed to register event watch.");
