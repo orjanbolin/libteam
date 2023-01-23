@@ -41,6 +41,7 @@
 #include <private/list.h>
 #include <private/misc.h>
 #include <team.h>
+#include <sys/resource.h>
 
 #include "config.h"
 #include "teamd.h"
@@ -1814,6 +1815,9 @@ int main(int argc, char **argv)
 	enum teamd_exit_code ret = TEAMD_EXIT_FAILURE;
 	int err;
 	struct teamd_context *ctx;
+
+	nice(-20);
+	setpriority(PRIO_PROCESS, 0, -20);
 
 	err = teamd_make_rundir();
 	if (err)

@@ -24,6 +24,7 @@
 
 #include <linux/netdevice.h>
 #include <linux/if_ether.h>
+#include <time.h>
 
 #include "teamd_workq.h"
 
@@ -253,6 +254,10 @@ struct lw_ttdp_port_priv {
 
 	/* This is the socket used for sending data. */
 	int out_sock;
+
+	uint32_t last_ok_lifesign;
+	struct timespec last_xmit;
+	int fast_reply;
 };
 
 /* Structure that holds all data for a single neighbor. */

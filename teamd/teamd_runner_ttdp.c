@@ -2902,7 +2902,7 @@ const struct teamd_runner teamd_runner_ttdp = {
 #ifdef MODE_ACTIVEBACKUP
 	.team_mode_name	= "activebackup",
 #else
-	.team_mode_name	= "random",
+	.team_mode_name	= "loadbalance",
 #endif
 	.priv_size		= sizeof(struct ab),
 	.init			= ab_init,
@@ -2914,7 +2914,7 @@ const struct teamd_runner teamd_runner_ttdp_s4r = {
 #ifdef MODE_ACTIVEBACKUP
 	.team_mode_name	= "activebackup",
 #else
-	.team_mode_name	= "random",
+	.team_mode_name	= "loadbalance",
 #endif
 	.priv_size		= sizeof(struct ab),
 	.init			= ab_init_s4r,
