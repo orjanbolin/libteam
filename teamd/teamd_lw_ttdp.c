@@ -1812,30 +1812,12 @@ static int lw_ttdp_link_status_delayed(struct teamd_context *ctx, int events,
 }
 
 /* FIXME check if the delayed thing is actually aborted properly */
-static int lw_ttdp_event_watch_port_changed(struct teamd_context *ctx,
+static int lw_ttdp_do_port_changed(struct teamd_context *ctx,
 					       struct teamd_port *tdport,
 					       void *priv) {
 	struct lw_common_port_priv *common_ppriv = priv;
 	struct lw_ttdp_port_priv *ttdp_ppriv = (struct lw_ttdp_port_priv *)priv;
-	teamd_ttdp_log_dbgx(ttdp_ppriv, "ttdp lw: lw_ttdp_event_watch_port_changed");
-	//struct timespec delay;
-
-	/* Check if we got a spurious event #1 (wrong interface) - these are from teamlib
-	 * directly, not sure if they actually ever happen */
-	if (common_ppriv->tdport != tdport ||
-		!team_is_port_changed(tdport->team_port)) {
-		//fprintf(stderr, "spurious event #1\n");
-		return 0;
-	}
-
 	bool link_up = team_is_port_link_up(tdport->team_port);
-
-	/* Check if we got a spurious event #2 (no state change) - these are from teamlib
-	 * directly, not sure if they actually ever happen */
-	//if (!teamd_link_watch_link_up_differs(common_ppriv, link_up)) {
-	//	fprintf(stderr, "spurious event #2\n");
-	//	return 0;
-	//}
 
 	teamd_ttdp_log_infox(ttdp_ppriv, "Physical link state is now %s", link_up ? "UP" : "DOWN");
 
@@ -1848,7 +1830,7 @@ static int lw_ttdp_event_watch_port_changed(struct teamd_context *ctx,
 			/* No delay, report immediately */
 			teamd_ttdp_log_infox(ttdp_ppriv, "Setting link state to UP immediately");
 			ttdp_ppriv->local_phy_link_up = link_up;
-			//return teamd_link_watch_check_link_up(ctx, tdport, common_ppriv, link_up);
+			teamd_link_watch_check_link_up(ctx, tdport, common_ppriv, link_up);
 			return lw_ttdp_link_status_delayed(ctx, 0, priv);
 		} else {
 			teamd_ttdp_log_infox(ttdp_ppriv, "Starting link state UP reporting delay");
@@ -1867,7 +1849,7 @@ static int lw_ttdp_event_watch_port_changed(struct teamd_context *ctx,
 			/* No delay, report immediately */
 			teamd_ttdp_log_infox(ttdp_ppriv, "Setting link state to DOWN immediately");
 			ttdp_ppriv->local_phy_link_up = link_up;
-			//return teamd_link_watch_check_link_up(ctx, tdport, common_ppriv, link_up);
+			teamd_link_watch_check_link_up(ctx, tdport, common_ppriv, link_up);
 			return lw_ttdp_link_status_delayed(ctx, 0, priv);
 		} else {
 			teamd_ttdp_log_infox(ttdp_ppriv, "Starting link state DOWN reporting delay");
@@ -1883,6 +1865,30 @@ static int lw_ttdp_event_watch_port_changed(struct teamd_context *ctx,
 	}
 
 	return 0;
+}
+
+static int lw_ttdp_event_watch_port_changed(struct teamd_context *ctx,
+					       struct teamd_port *tdport,
+					       void *priv) {
+	struct lw_common_port_priv *common_ppriv = priv;
+	struct lw_ttdp_port_priv *ttdp_ppriv = (struct lw_ttdp_port_priv *)priv;
+	teamd_ttdp_log_dbgx(ttdp_ppriv, "ttdp lw: lw_ttdp_event_watch_port_changed");
+
+	/* Check if we got a spurious event #1 (wrong interface) - these are from teamlib
+	 * directly, not sure if they actually ever happen */
+	if (common_ppriv->tdport != tdport ||
+		!team_is_port_changed(tdport->team_port)) {
+		return 0;
+	}
+
+	/* Check if we got a spurious event #2 (no state change) - these are from teamlib
+	 * directly, not sure if they actually ever happen */
+	//if (!teamd_link_watch_link_up_differs(common_ppriv, link_up)) {
+	//	fprintf(stderr, "spurious event #2\n");
+	//	return 0;
+	//}
+
+	return lw_ttdp_do_port_changed(ctx, tdport, priv);
 }
 
 static const struct teamd_event_watch_ops lw_ttdp_port_watch_ops = {
@@ -2015,8 +2021,9 @@ static int lw_ttdp_port_added(struct teamd_context *ctx,
 		ab->line_timeout_value_update_func(ctx, ab);
 	}
 
+	lw_ttdp_do_port_changed(ctx, tdport, ttdp_ppriv);
 	ttdp_ppriv->local_phy_link_up = team_is_port_link_up(tdport->team_port);
-	force_parent_port_status(ctx, ttdp_ppriv, 1);
+	force_parent_port_status(ctx, ttdp_ppriv, team_is_port_link_up(tdport->team_port));
 	return err;
 }
 
