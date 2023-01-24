@@ -2873,7 +2873,7 @@ static void ab_fini(struct teamd_context *ctx, void *priv)
 
 const struct teamd_runner teamd_runner_ttdp = {
 	.name			= "ttdp",
-	.team_mode_name	= "loadbalance",
+	.team_mode_name	=	"loadbalance",
 	.priv_size		= sizeof(struct ab),
 	.init			= ab_init,
 	.fini			= ab_fini,
@@ -2881,7 +2881,7 @@ const struct teamd_runner teamd_runner_ttdp = {
 
 const struct teamd_runner teamd_runner_ttdp_s4r = {
 	.name			= "ttdp_s4r",
-	.team_mode_name	= "loadbalance",
+	.team_mode_name	=	"loadbalance",
 	.priv_size		= sizeof(struct ab),
 	.init			= ab_init_s4r,
 	.fini			= ab_fini,

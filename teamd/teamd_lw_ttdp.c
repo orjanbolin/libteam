@@ -41,6 +41,8 @@
 #include <linux/netdevice.h>
 #include <ctype.h>
 #include <sys/time.h>
+#include <time.h>
+#include <math.h>
 #include "teamd.h"
 #include "teamd_link_watch.h"
 #include "teamd_config.h"
@@ -49,22 +51,27 @@
 
 uint16_t frame_checksum(const uint8_t *cp, int len);
 
+//#define DEBUG 1
+
 #define IFNAME_OR_EMPTY(P) ((P && P->start.common.tdport && P->start.common.tdport->ifname)\
 	? P->start.common.tdport->ifname : "ttdp-lw")
 #ifdef DEBUG
 #define teamd_ttdp_log_infox(P, format, args...) do {\
 		struct timeval _debug_tv;\
 		gettimeofday(&_debug_tv, NULL);\
-		fprintf(stderr, "%s %ld.%ld :" format "\n", IFNAME_OR_EMPTY(P), _debug_tv.tv_sec, _debug_tv.tv_usec, ## args);\
+		daemon_log(LOG_INFO, "%s %ld.%ld : " format, IFNAME_OR_EMPTY(P), _debug_tv.tv_sec, _debug_tv.tv_usec, ## args);\
 	} while (0)
-#define teamd_ttdp_log_dbgx(P, format, args...) daemon_log(LOG_DEBUG, "%s: " format, IFNAME_OR_EMPTY(P), ## args)
+#define teamd_ttdp_log_dbgx(P, format, args...) do {\
+		struct timeval _debug_tv = {0};\
+		gettimeofday(&_debug_tv, NULL);\
+		daemon_log(LOG_DEBUG, "%s %ld.%ld : " format, IFNAME_OR_EMPTY(P), _debug_tv.tv_sec, _debug_tv.tv_usec, ## args);\
+	} while (0)
 #else
 #define teamd_ttdp_log_infox(P, format, args...) do {} while (0)
 #define teamd_ttdp_log_dbgx(P, format, args...) do {} while (0)
 #endif
 #define teamd_ttdp_log_info(format, args...) daemon_log(LOG_INFO, format, ## args)
 #define teamd_ttdp_log_dbg(format, args...) daemon_log(LOG_DEBUG, format, ## args)
-
 
 /* BPF types */
 
@@ -1214,7 +1221,22 @@ static int lw_ttdp_send_fast(struct teamd_context *ctx, int events, void *priv) 
 
 static int lw_ttdp_send(struct teamd_context *ctx, int events, void *priv) {
 	//fprintf(stderr, "ttdp lw: lw_ttdp_send_fast\n");
+	struct timespec now;
 	struct lw_ttdp_port_priv* ttdp_ppriv = (struct lw_ttdp_port_priv*)priv;
+
+	int r = clock_gettime(CLOCK_MONOTONIC_RAW, &now);
+	if (!ttdp_ppriv->fast_reply && (ttdp_ppriv->last_xmit.tv_sec != 0 || ttdp_ppriv->last_xmit.tv_nsec != 0)) {
+		double exp = ttdp_ppriv->slow_interval.tv_sec + (ttdp_ppriv->slow_interval.tv_nsec / 1000000000.0);
+		double delta = (now.tv_sec - ttdp_ppriv->last_xmit.tv_sec) + ((now.tv_nsec - ttdp_ppriv->last_xmit.tv_nsec) / 1000000000.0);
+		double diff = exp - delta;
+		double adiff = fabs(diff);
+		if (adiff > 0.015) {
+			teamd_ttdp_log_dbgx(ttdp_ppriv, "Slow send timer over/underrun! diff %f ms, delta is %f ms, expected %f ms",
+				adiff * 1000.0, delta  * 1000.0, exp  * 1000.0);
+		}
+	}
+
+	memcpy(&ttdp_ppriv->last_xmit, &now, sizeof(ttdp_ppriv->last_xmit));
 
 	/* Construct TTDP HELLO frame */
 	struct ttdp_default_hello_frame frame;
@@ -1256,6 +1278,7 @@ static void ttdp_stop_slow_send_timer(struct teamd_context *ctx,
 static inline void ttdp_start_fast_send_timer(struct teamd_context *ctx,
 	struct lw_ttdp_port_priv *ttdp_ppriv) {
 	struct ab *ab = ctx->runner_priv;
+	teamd_ttdp_log_dbgx(ttdp_ppriv, "started FAST timer");
 	if (ttdp_ppriv->local_slow_timer_started) {
 		ttdp_stop_slow_send_timer(ctx, ttdp_ppriv);
 	}
@@ -1276,6 +1299,7 @@ static inline void ttdp_start_fast_send_timer(struct teamd_context *ctx,
 
 static inline void ttdp_stop_fast_send_timer(struct teamd_context *ctx,
 	struct lw_ttdp_port_priv *ttdp_ppriv) {
+	teamd_ttdp_log_dbgx(ttdp_ppriv, "stopped FAST timer");
 	teamd_loop_callback_disable(ctx, TTDP_PERIODIC_FAST_SEND_CB_NAME, ttdp_ppriv);
 	teamd_loop_callback_del(ctx, TTDP_PERIODIC_FAST_SEND_CB_NAME, ttdp_ppriv);
 	ttdp_ppriv->local_fast_timer_started = false;
@@ -1283,6 +1307,7 @@ static inline void ttdp_stop_fast_send_timer(struct teamd_context *ctx,
 
 static inline void ttdp_start_slow_send_timer(struct teamd_context *ctx,
 	struct lw_ttdp_port_priv *ttdp_ppriv) {
+		teamd_ttdp_log_dbgx(ttdp_ppriv, "started SLOW timer");
 	if (ttdp_ppriv->local_fast_timer_started) {
 		ttdp_stop_fast_send_timer(ctx, ttdp_ppriv);
 	}
@@ -1302,6 +1327,7 @@ static inline void ttdp_start_slow_send_timer(struct teamd_context *ctx,
 
 static inline void ttdp_stop_slow_send_timer(struct teamd_context *ctx,
 	struct lw_ttdp_port_priv *ttdp_ppriv) {
+		teamd_ttdp_log_dbgx(ttdp_ppriv, "stopped SLOW timer");
 	teamd_loop_callback_disable(ctx, TTDP_PERIODIC_SLOW_SEND_CB_NAME, ttdp_ppriv);
 	teamd_loop_callback_del(ctx, TTDP_PERIODIC_SLOW_SEND_CB_NAME, ttdp_ppriv);
 	ttdp_ppriv->local_slow_timer_started = false;
@@ -1313,7 +1339,7 @@ static inline void ttdp_stop_slow_send_timer(struct teamd_context *ctx,
 static int lw_ttdp_enter_recovery_mode(struct teamd_context *ctx, int events, void *priv) {
 	/* Start fast sending mode and start fast timeout timer */
 	struct lw_ttdp_port_priv *ttdp_ppriv = (struct lw_ttdp_port_priv *)priv;
-	teamd_ttdp_log_dbgx(ttdp_ppriv, "ttdp lw: tw_ttdp_enter_recovery_mode");
+	teamd_ttdp_log_dbgx(ttdp_ppriv, "ttdp lw: tw_ttdp_enter_recovery_mode at lifesign %u", ttdp_ppriv->last_ok_lifesign);
 	teamd_ttdp_log_infox(ttdp_ppriv, "Entered recovery mode - logical link state pending...");
 
 	//teamd_loop_callback_enable(ctx, TTDP_PERIODIC_FAST_SEND_CB_NAME, priv);
@@ -1341,7 +1367,8 @@ static int lw_ttdp_fail_recovery_mode(struct teamd_context *ctx, int events, voi
 	struct lw_ttdp_port_priv* ttdp_ppriv = (struct lw_ttdp_port_priv*)priv;
 	struct ab *ab = ctx->runner_priv;
 
-	teamd_ttdp_log_dbgx(ttdp_ppriv, "ttdp lw: lw_ttdp_fail_recovery_mode in mode %d", ttdp_ppriv->local_recovery_mode);
+	teamd_ttdp_log_dbgx(ttdp_ppriv, "ttdp lw: lw_ttdp_fail_recovery_mode in mode %d, last lifesign %u",
+		ttdp_ppriv->local_recovery_mode, ttdp_ppriv->last_ok_lifesign);
 	teamd_ttdp_log_infox(ttdp_ppriv, "Failed recovery mode - logical link state is now DOWN");
 	/* Set port status to "not good" and stop the timeout timers
 	 * since we're now in recovery mode and will just keep sending
@@ -1368,6 +1395,10 @@ static int lw_ttdp_fail_recovery_mode(struct teamd_context *ctx, int events, voi
 		ttdp_start_slow_send_timer(ctx, ttdp_ppriv);
 	}
 
+	return 0;
+}
+
+static int lw_ttdp_null_cb(struct teamd_context *ctx, int events, void *priv) {
 	return 0;
 }
 
@@ -1536,6 +1567,7 @@ static int lw_ttdp_receive(struct teamd_context *ctx, int events, void *priv) {
 			&(ttdp_ppriv->forget_peer),
 			&(ttdp_ppriv->forget_peer));
 		teamd_loop_callback_disable(ctx, TTDP_PERIODIC_FORGET_PEER_CB_NAME, priv);
+		ttdp_ppriv->last_ok_lifesign = hello_recv.lifeSign;
 
 		if (ttdp_frame_is_peer_status_ok(&hello_recv) != 0) {
 			/* Received a frame from a neighbor that doesn't hear us */
@@ -1720,7 +1752,9 @@ static int lw_ttdp_receive(struct teamd_context *ctx, int events, void *priv) {
 		if (hello_recv.timeoutSpeed == 2) {
 			teamd_ttdp_log_dbgx(ttdp_ppriv, "Recv HELLO in FAST MODE, replying");
 			/* send a reply */
-			lw_ttdp_send(ctx, events, priv);
+			ttdp_ppriv->fast_reply = 1;
+			lw_ttdp_send(ctx, events, ttdp_ppriv);
+			ttdp_ppriv->fast_reply = 0;
 		}
 
 	} else {
