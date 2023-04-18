@@ -1987,7 +1987,7 @@ static int lw_ttdp_port_added(struct teamd_context *ctx,
 
 	//teamd_loop_callback_enable(ctx, TTDP_PERIODIC_FAST_TIMEOUT_CB_NAME, ttdp_ppriv);
 
-	//teamd_loop_callback_enable(ctx, TTDP_PERIODIC_SLOW_TIMEOUT_CB_NAME, ttdp_ppriv);
+	teamd_loop_callback_enable(ctx, TTDP_PERIODIC_SLOW_TIMEOUT_CB_NAME, ttdp_ppriv);
 
 
 	/* This one we only add - it gets set up when needed upon link status change */
