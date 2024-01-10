@@ -71,8 +71,9 @@
 #define TTDP_NEIGH_PORT_DISAGREES 1
 #define TTDP_NEIGH_PORT_AGREES 2
 
-#define TTDP_INITIAL_MODE_SLOW 1
-#define TTDP_INITIAL_MODE_FAST 2
+#define TTDP_TRANSMISSION_MODE_SLOW 1  /* Periodical (100ms) sending in normal/slow mode */
+#define TTDP_TRANSMISSION_MODE_FAST 2  /* Periodical (15ms) sending in recovery/fast mode */
+#define TTDP_TRANSMISSION_MODE_REPLY 3 /* Reply */
 
 #define TTDP_VENDOR_INFO_DEFAULT "UNSPECIFIED"
 
@@ -112,6 +113,10 @@ struct lw_ttdp_port_priv {
 	/* Time after which, if in recovery mode, we consider logical link status as
 	 * down. Default is TTDP_FAST_TIMEOUT_DEFAULT */
 	struct timespec fast_timeout;
+
+	/* Time after line no longer considered as ok until the port should be
+	 * considered as an end port. Default is TTDP_END_PORT_DETECT_DELAY_MS_DEFAULT */
+	struct timespec end_port_detect_delay_ms;
 
 	/* set to 1 ms, and used as a value for "don't wait" below */
 	struct timespec immediate;
@@ -207,6 +212,8 @@ struct lw_ttdp_port_priv {
 	 * HELLO frame. */
 	uint32_t checksum_fail_counter;
 
+	uint8_t remote_id[ETH_ALEN];
+
 	/* Current neighbor node MAC... */
 	uint8_t neighbor_mac[ETH_ALEN];
 	/* ...UUID... */
@@ -257,7 +264,6 @@ struct lw_ttdp_port_priv {
 
 	uint32_t last_ok_lifesign;
 	struct timespec last_xmit;
-	int fast_reply;
 };
 
 /* Structure that holds all data for a single neighbor. */

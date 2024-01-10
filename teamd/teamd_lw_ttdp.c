@@ -59,12 +59,12 @@ uint16_t frame_checksum(const uint8_t *cp, int len);
 #define teamd_ttdp_log_infox(P, format, args...) do {\
 		struct timeval _debug_tv;\
 		gettimeofday(&_debug_tv, NULL);\
-		daemon_log(LOG_INFO, "%s %ld.%ld : " format, IFNAME_OR_EMPTY(P), _debug_tv.tv_sec, _debug_tv.tv_usec, ## args);\
+		daemon_log(LOG_INFO, "%s %ld.%06ld : " format, IFNAME_OR_EMPTY(P), (long int)_debug_tv.tv_sec, (long int)_debug_tv.tv_usec, ## args);\
 	} while (0)
 #define teamd_ttdp_log_dbgx(P, format, args...) do {\
 		struct timeval _debug_tv = {0};\
 		gettimeofday(&_debug_tv, NULL);\
-		daemon_log(LOG_DEBUG, "%s %ld.%ld : " format, IFNAME_OR_EMPTY(P), _debug_tv.tv_sec, _debug_tv.tv_usec, ## args);\
+		daemon_log(LOG_DEBUG, "%s %ld.%06ld : " format, IFNAME_OR_EMPTY(P), (long int)_debug_tv.tv_sec, (long int)_debug_tv.tv_usec, ## args);\
 	} while (0)
 #else
 #define teamd_ttdp_log_infox(P, format, args...) do {} while (0)
@@ -430,6 +430,10 @@ static const uint8_t ttdp_hello_destination_mac[6] =
 #define TTDP_PERIODIC_FAST_TIMEOUT_CB_NAME	"ttdp_periodic_timeout_fast"
 #define TTDP_FAST_TIMEOUT_DEFAULT 45
 
+/* Delay before judging end port due to link not ok - 100 ms default */
+#define TTDP_END_PORT_DETECT_DELAY_CB_NAME	"ttdp_end_port_detect"
+#define TTDP_END_PORT_DETECT_DELAY_MS_DEFAULT 100
+
 /* Once we hear from a neighbor, we set our recvstatus to OK on that line.
  * This timeout determines how long we wait (without receiving any frames)
  * before giving up on this neighbor, and setting recvstatus back to ERROR.
@@ -459,6 +463,16 @@ static const uint8_t ttdp_hello_destination_mac[6] =
 static struct ttdp_hello_tlv hello_data_storage[RINGBUF_SIZE] = {};
 static int hello_data_storage_next_idx = 0;
 
+static char* getTransmissionModeStr(u_int8_t mode) {
+	if (mode == TTDP_TRANSMISSION_MODE_SLOW)
+		return "SLOW";
+	if (mode == TTDP_TRANSMISSION_MODE_FAST)
+		return "FAST";
+	if (mode == TTDP_TRANSMISSION_MODE_REPLY)
+		return "REPLY";
+	return "UNKN";
+}
+
 static void dump_hello_frame(bool is_s4r, int i) {
 	struct ttdp_hello_tlv* data = &(hello_data_storage[i]);
 	const char* antiv_str[] = {"ERR", "NO ", "YES", "UND"};
@@ -475,7 +489,7 @@ static void dump_hello_frame(bool is_s4r, int i) {
 			data->egressLine,
 			data->egressDir,
 			data->primaryLine,
-			((data->timeoutSpeed == 1) ? ("SLOW") : ((data->timeoutSpeed == 2) ? ("FAST") : ("UNKN"))),
+			getTransmissionModeStr(data->timeoutSpeed),
 			data->srcPortId,
 			antiv_str[data->inaugInhibition],
 			antiv_str[(data->recvStatuses & 0xc0) >> 6],
@@ -494,7 +508,7 @@ static void dump_hello_frame(bool is_s4r, int i) {
 			data->lifeSign,
 			data->egressLine,
 			data->egressDir,
-			((data->timeoutSpeed == 1) ? ("SLOW") : ((data->timeoutSpeed == 2) ? ("FAST") : ("UNKN"))),
+			getTransmissionModeStr(data->timeoutSpeed),
 			data->srcPortId,
 			antiv_str[data->inaugInhibition],
 			antiv_str[(data->recvStatuses & 0xc0) >> 6],
@@ -684,7 +698,7 @@ static void update_parent_port_status(struct teamd_context *ctx,
 			(ab->port_statuses[1] << 4) |
 			(ab->port_statuses[2] << 2) |
 			(ab->port_statuses[3] << 0);
-		teamd_ttdp_log_dbgx(ttdp_ppriv, "setting line status to %d", state);
+		teamd_ttdp_log_dbgx(ttdp_ppriv, "setting line status to %d (heard = %d)", state, ttdp_ppriv->heard);
 		if (ab->line_state_update_func) {
 			ab->line_state_update_func(ctx, ctx->runner_priv);
 		}
@@ -707,7 +721,6 @@ static void force_parent_port_status(struct teamd_context *ctx,
 		}
 	}
 }
-
 
 static int lw_ttdp_load_options(struct teamd_context *ctx,
 			      struct teamd_port *tdport,
@@ -791,6 +804,15 @@ static int lw_ttdp_load_options(struct teamd_context *ctx,
 		teamd_ttdp_log_dbgx(ttdp_ppriv, "ttdp fast_timeout %d", tmp);
 	}
 	ms_to_timespec(&(ttdp_ppriv->fast_timeout), tmp);
+
+	err = teamd_config_int_get(ctx, &tmp, "@.end_port_detect_delay_ms", cpcookie);
+	if (err) {
+		teamd_log_warn("Failed to get end_port_detect_delay_ms, defaulting to %d ms", TTDP_END_PORT_DETECT_DELAY_MS_DEFAULT);
+		tmp = TTDP_END_PORT_DETECT_DELAY_MS_DEFAULT;
+	} else {
+		teamd_ttdp_log_dbgx(ttdp_ppriv, "ttdp end_port_detect_delay_ms %d", tmp);
+	}
+	ms_to_timespec(&(ttdp_ppriv->end_port_detect_delay_ms), tmp);
 
 	err = teamd_config_int_get(ctx, &tmp, "@.forget_peer_timeout", cpcookie);
 	if (err) {
@@ -956,12 +978,12 @@ static int lw_ttdp_load_options(struct teamd_context *ctx,
 static int update_overall_state(struct teamd_context *ctx, void* priv){
 	struct lw_common_port_priv *common_ppriv = priv;
 	struct lw_ttdp_port_priv* ttdp_ppriv = (struct lw_ttdp_port_priv*)priv;
-	/*struct ab* ab = ctx->runner_priv;*/
-
-	bool overall_state = (ttdp_ppriv->local_ttdp_link_up
-		&& ttdp_ppriv->local_phy_link_up && ttdp_ppriv->heard
-		/*&& (ab->aggregate_status != TTDP_AGG_STATE_FIXED_END)*/);
-	teamd_ttdp_log_infox(ttdp_ppriv, "state change to -> %s", (overall_state ? "UP" : "DOWN"));
+	bool overall_state = (ttdp_ppriv->local_ttdp_link_up && ttdp_ppriv->local_phy_link_up && ttdp_ppriv->heard);
+	teamd_ttdp_log_infox(ttdp_ppriv, "state change to -> %s (ttdp_link_up=%d phy_link_up=%d heard=%d)",
+	    (overall_state ? "UP" : "DOWN"),
+		ttdp_ppriv->local_ttdp_link_up,
+		ttdp_ppriv->local_phy_link_up,
+		ttdp_ppriv->heard);
 	return teamd_link_watch_check_link_up(ctx, common_ppriv->tdport, priv, overall_state);
 }
 
@@ -1062,7 +1084,7 @@ static int __get_port_curr_hwaddr(struct lw_ttdp_port_priv *priv,
 }
 
 static void construct_default_frame(struct ab* parent, struct lw_ttdp_port_priv *ttdp_ppriv,
-	struct ttdp_default_hello_frame* out) {
+	struct ttdp_default_hello_frame* out, int transmission_mode) {
 
 	struct sockaddr_ll source_addr;
 
@@ -1102,7 +1124,7 @@ static void construct_default_frame(struct ab* parent, struct lw_ttdp_port_priv 
 
 	memcpy(&(out->hello_tlv.oui), ttdp_hello_tlv_oui, 3);
 	out->hello_tlv.ttdpSubtype = 0x01;
-	out->hello_tlv.tlvCS = 0; /* Calculated in lw_ttdp_send() / lw_ttdp_send_fast() */
+	out->hello_tlv.tlvCS = 0; /* Calculated in lw_ttdp_send() */
 	if (parent->is_s4r)
 		out->hello_tlv.version = htonl(0x02000000);
 	else
@@ -1122,7 +1144,20 @@ static void construct_default_frame(struct ab* parent, struct lw_ttdp_port_priv 
 	else
 		out->hello_tlv.recvStatuses = parent->port_statuses_b;
 
-	out->hello_tlv.timeoutSpeed = 0; /* Set in lw_ttdp_send() / lw_ttdp_send_fast() */
+	if (transmission_mode == TTDP_TRANSMISSION_MODE_FAST) {
+		out->hello_tlv.timeoutSpeed = TTDP_TRANSMISSION_MODE_FAST;
+	} else {
+		/* When building a reply frame set timeout speed same as for frames send in normal/slow mode */
+		out->hello_tlv.timeoutSpeed = TTDP_TRANSMISSION_MODE_SLOW;
+	}
+
+	if (transmission_mode == TTDP_TRANSMISSION_MODE_REPLY) {
+		/* When building a reply frame use the mac address of the requester as remote id */
+		memcpy(&(out->hello_tlv.remoteId), ttdp_ppriv->remote_id, ETH_ALEN);
+	} else {
+		memcpy(&(out->hello_tlv.remoteId), ttdp_ppriv->neighbor_mac, ETH_ALEN);
+	}
+
 	//memcpy(&(out->hello_tlv.srcId), source_addr.sll_addr, 6);
 	/* FIXME check sizes of these */
 	memcpy(&(out->hello_tlv.srcId), ttdp_ppriv->identity_hwaddr, 6);
@@ -1142,7 +1177,7 @@ static void construct_default_frame(struct ab* parent, struct lw_ttdp_port_priv 
 		out->hello_tlv.inaugInhibition = TTDP_LOGIC_FALSE;
 	if (out->hello_tlv.inaugInhibition != TTDP_LOGIC_FALSE)
 		out->hello_tlv.inaugInhibition = TTDP_LOGIC_TRUE;
-	memcpy(&(out->hello_tlv.remoteId), ttdp_ppriv->neighbor_mac, 6);
+
 	if (parent->is_s4r)
 		out->hello_tlv.primaryLine = parent->primary_state_set;
 	else
@@ -1187,13 +1222,20 @@ static int ttdp_verify_checksum(struct ttdp_hello_tlv* tlv, struct lw_ttdp_port_
 	return 0;
 }
 
-static int lw_ttdp_send_fast(struct teamd_context *ctx, int events, void *priv) {
-	//fprintf(stderr, "ttdp lw: lw_ttdp_send_fast\n");
-	struct lw_ttdp_port_priv* ttdp_ppriv = (struct lw_ttdp_port_priv*)priv;
+static int ttdp_frame_is_peer_status_ok(struct ttdp_hello_tlv* hello_recv) {
+	/* return 0 if the peer claims he can hear us */
 
+	int idx = hello_recv->egressLine - 'A';
+	/* 2 bits per line, with line A to the left: AABBCCDD */
+	uint8_t peer_status = ((hello_recv->recvStatuses >> (6-(2*idx))) & 3);
+	return (peer_status == 2) ? 0 : 1; /* status 2 means OK */
+}
+
+static int lw_ttdp_send(struct teamd_context *ctx, struct lw_ttdp_port_priv *ttdp_ppriv, int transmission_mode) {
+
+	/* Construct TTDP HELLO frame */
 	struct ttdp_default_hello_frame frame;
-	construct_default_frame(ctx->runner_priv, ttdp_ppriv, &frame);
-	frame.hello_tlv.timeoutSpeed = 2; /* fast */
+	construct_default_frame(ctx->runner_priv, ttdp_ppriv, &frame, transmission_mode);
 
 	struct sockaddr_ll ll_dest;
 	memset(&ll_dest, 0, sizeof(ll_dest));
@@ -1205,27 +1247,37 @@ static int lw_ttdp_send_fast(struct teamd_context *ctx, int events, void *priv) 
 
 	ttdp_insert_checksum(&(frame.hello_tlv));
 
-	/* Send TTDP HELLO frame here */
 	if (ttdp_ppriv->silent == true)
 		return 0;
 
-	/* Send TTDP HELLO frame here (FAST speed) */
+	/* Send TTDP HELLO frame here */
 	int err = teamd_sendto(ttdp_ppriv->out_sock, &frame, sizeof(frame),
 				0, (struct sockaddr *) &ll_dest,
 				sizeof(ll_dest));
 	struct ab *ab = ctx->runner_priv;
 	ab->lines_hello_stats[ttdp_ppriv->line].sent_hello_frames++;
-	//fprintf(stderr, "ttdp lw: lw_ttdp_send result %d\n", err);
+
+	teamd_ttdp_log_dbgx(ttdp_ppriv, "Send HELLO in %s mode with peer status %d with lifesign %ld",
+		getTransmissionModeStr(transmission_mode),
+		ttdp_frame_is_peer_status_ok(&frame.hello_tlv) == 0,
+		(long int)frame.hello_tlv.lifeSign);
+
 	return err;
 }
 
-static int lw_ttdp_send(struct teamd_context *ctx, int events, void *priv) {
-	//fprintf(stderr, "ttdp lw: lw_ttdp_send_fast\n");
-	struct timespec now;
+static int lw_ttdp_send_fast(struct teamd_context *ctx, int events, void *priv) {
 	struct lw_ttdp_port_priv* ttdp_ppriv = (struct lw_ttdp_port_priv*)priv;
 
-	int r = clock_gettime(CLOCK_MONOTONIC_RAW, &now);
-	if (!ttdp_ppriv->fast_reply && (ttdp_ppriv->last_xmit.tv_sec != 0 || ttdp_ppriv->last_xmit.tv_nsec != 0)) {
+	int err = lw_ttdp_send(ctx, ttdp_ppriv, TTDP_TRANSMISSION_MODE_FAST);
+	return err;
+}
+
+static int lw_ttdp_send_slow(struct teamd_context *ctx, int events, void *priv) {
+	struct lw_ttdp_port_priv* ttdp_ppriv = (struct lw_ttdp_port_priv*)priv;
+
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC_RAW, &now);
+	if (ttdp_ppriv->last_xmit.tv_sec != 0 || ttdp_ppriv->last_xmit.tv_nsec != 0) {
 		double exp = ttdp_ppriv->slow_interval.tv_sec + (ttdp_ppriv->slow_interval.tv_nsec / 1000000000.0);
 		double delta = (now.tv_sec - ttdp_ppriv->last_xmit.tv_sec) + ((now.tv_nsec - ttdp_ppriv->last_xmit.tv_nsec) / 1000000000.0);
 		double diff = exp - delta;
@@ -1235,34 +1287,9 @@ static int lw_ttdp_send(struct teamd_context *ctx, int events, void *priv) {
 				adiff * 1000.0, delta  * 1000.0, exp  * 1000.0);
 		}
 	}
-
 	memcpy(&ttdp_ppriv->last_xmit, &now, sizeof(ttdp_ppriv->last_xmit));
 
-	/* Construct TTDP HELLO frame */
-	struct ttdp_default_hello_frame frame;
-	construct_default_frame(ctx->runner_priv, ttdp_ppriv, &frame);
-	frame.hello_tlv.timeoutSpeed = 1; /* slow */
-
-	struct sockaddr_ll ll_dest;
-	memset(&ll_dest, 0, sizeof(ll_dest));
-	/* Get the format right first */
-	__get_port_curr_hwaddr_out(ttdp_ppriv, &ll_dest, 0);
-	memcpy(&(ll_dest.sll_addr), ttdp_hello_destination_mac, 6);
-	ll_dest.sll_family = AF_PACKET;
-	ll_dest.sll_protocol = ntohs(0x8100);
-
-	ttdp_insert_checksum(&(frame.hello_tlv));
-
-	if (ttdp_ppriv->silent == true)
-		return 0;
-
-	/* Send TTDP HELLO frame here (SLOW speed) */
-	int err = teamd_sendto(ttdp_ppriv->out_sock, &frame, sizeof(frame),
-				0, (struct sockaddr *) &ll_dest,
-				sizeof(ll_dest));
-	struct ab *ab = ctx->runner_priv;
-	ab->lines_hello_stats[ttdp_ppriv->line].sent_hello_frames++;
-	//fprintf(stderr, "ttdp lw: lw_ttdp_send result %d\n", err);
+	int err = lw_ttdp_send(ctx, ttdp_ppriv, TTDP_TRANSMISSION_MODE_SLOW);
 	return err;
 }
 
@@ -1317,7 +1344,7 @@ static inline void ttdp_start_slow_send_timer(struct teamd_context *ctx,
 			ctx,
 			TTDP_PERIODIC_SLOW_SEND_CB_NAME,
 			ttdp_ppriv,
-			lw_ttdp_send,
+			lw_ttdp_send_slow,
 			&(ttdp_ppriv->slow_interval),
 			(ttdp_ppriv->initial_slow_interval));
 	}
@@ -1333,8 +1360,6 @@ static inline void ttdp_stop_slow_send_timer(struct teamd_context *ctx,
 	ttdp_ppriv->local_slow_timer_started = false;
 }
 
-
-
 /* Called SLOW_TIMEOUT (130 ms) after last receipt of a HELLO packet */
 static int lw_ttdp_enter_recovery_mode(struct teamd_context *ctx, int events, void *priv) {
 	/* Start fast sending mode and start fast timeout timer */
@@ -1344,7 +1369,6 @@ static int lw_ttdp_enter_recovery_mode(struct teamd_context *ctx, int events, vo
 
 	//teamd_loop_callback_enable(ctx, TTDP_PERIODIC_FAST_SEND_CB_NAME, priv);
 	ttdp_start_fast_send_timer(ctx, ttdp_ppriv);
-
 
 	ttdp_ppriv->local_recovery_mode = 1;
 
@@ -1361,6 +1385,7 @@ static int lw_ttdp_enter_recovery_mode(struct teamd_context *ctx, int events, vo
 
 	return 0;
 }
+
 /* Called FAST_TIMEOUT (45 ms) after entering recovery mode */
 static int lw_ttdp_fail_recovery_mode(struct teamd_context *ctx, int events, void *priv) {
 	//struct lw_common_port_priv *common_ppriv = priv;
@@ -1369,7 +1394,7 @@ static int lw_ttdp_fail_recovery_mode(struct teamd_context *ctx, int events, voi
 
 	teamd_ttdp_log_dbgx(ttdp_ppriv, "ttdp lw: lw_ttdp_fail_recovery_mode in mode %d, last lifesign %u",
 		ttdp_ppriv->local_recovery_mode, ttdp_ppriv->last_ok_lifesign);
-	teamd_ttdp_log_infox(ttdp_ppriv, "Failed recovery mode - logical link state is now DOWN");
+	teamd_ttdp_log_infox(ttdp_ppriv, "Failed recovery mode - logical link state is now DOWN (heard = %d)", ttdp_ppriv->heard);
 	/* Set port status to "not good" and stop the timeout timers
 	 * since we're now in recovery mode and will just keep sending
 	 * frames until we get a reply */
@@ -1377,15 +1402,15 @@ static int lw_ttdp_fail_recovery_mode(struct teamd_context *ctx, int events, voi
 	/* set port status */
 	ttdp_ppriv->local_ttdp_link_up = false;
 
-	/* consider neighbor down */
+	/* consider line down */
 	ab->neighbor_lines[ttdp_ppriv->line] = '-';
 	update_parent_port_status(ctx, ttdp_ppriv);
-	update_neighbor_to_none(ttdp_ppriv);
 	update_overall_state(ctx, priv);
 	teamd_event_port_changed(ctx, ttdp_ppriv->start.common.tdport);
 
 	teamd_loop_callback_disable(ctx, TTDP_PERIODIC_SLOW_TIMEOUT_CB_NAME, priv);
 	teamd_loop_callback_disable(ctx, TTDP_PERIODIC_FAST_TIMEOUT_CB_NAME, priv);
+	teamd_loop_callback_disable(ctx, TTDP_END_PORT_DETECT_DELAY_CB_NAME, priv);
 
 	/* resume sending in SLOW mode by default; if configured, stay in
 	 * FAST mode otherwise */
@@ -1394,6 +1419,30 @@ static int lw_ttdp_fail_recovery_mode(struct teamd_context *ctx, int events, voi
 	} else {
 		ttdp_start_slow_send_timer(ctx, ttdp_ppriv);
 	}
+
+	/* Set end node detection delay */
+	teamd_loop_callback_timer_set(ctx,
+		TTDP_END_PORT_DETECT_DELAY_CB_NAME,
+		priv,
+		&(ttdp_ppriv->end_port_detect_delay_ms),
+		&(ttdp_ppriv->end_port_detect_delay_ms));
+	teamd_loop_callback_enable(ctx, TTDP_END_PORT_DETECT_DELAY_CB_NAME, priv);
+
+	return 0;
+}
+
+static int lw_ttdp_end_port_detected(struct teamd_context *ctx, int events, void *priv) {
+	struct lw_ttdp_port_priv* ttdp_ppriv = (struct lw_ttdp_port_priv*)priv;
+
+	/* Reset end port detection delay */
+	teamd_loop_callback_disable(ctx, TTDP_END_PORT_DETECT_DELAY_CB_NAME, priv);
+
+	teamd_ttdp_log_infox(ttdp_ppriv, "End port detected");
+
+	/* consider this to be an end port (no neighbor) */
+	update_neighbor_to_none(ttdp_ppriv);
+
+	teamd_event_port_changed(ctx, ttdp_ppriv->start.common.tdport);
 
 	return 0;
 }
@@ -1499,16 +1548,7 @@ static void store_hello_frame(struct ttdp_hello_tlv* data) {
 }
 
 static struct ttdp_hello_tlv *get_latest_hello_frame(void) {
-	return &hello_data_storage[(hello_data_storage_next_idx - 1) % RINGBUF_SIZE];
-}
-
-static int ttdp_frame_is_peer_status_ok(struct ttdp_hello_tlv* hello_recv) {
-	/* return 0 if the peer claims he can hear us */
-
-	int idx = hello_recv->egressLine - 'A';
-	/* 2 bits per line, with line A to the left: AABBCCDD */
-	uint8_t peer_status = ((hello_recv->recvStatuses >> (6-(2*idx))) & 3);
-	return (peer_status == 2) ? 0 : 1; /* status 2 means OK */
+	return &hello_data_storage[(hello_data_storage_next_idx + RINGBUF_SIZE - 1) % RINGBUF_SIZE];
 }
 
 static void set_neigh_hears_us(struct teamd_context *ctx, struct lw_ttdp_port_priv* ttdp_ppriv, bool state) {
@@ -1532,7 +1572,7 @@ static int lw_ttdp_receive(struct teamd_context *ctx, int events, void *priv) {
 	struct lw_ttdp_port_priv* ttdp_ppriv = (struct lw_ttdp_port_priv*)priv;
 	static struct ttdp_hello_tlv hello_recv;
 	uint8_t primary_line;
-	uint8_t primary_state;
+	uint8_t primary_state = 0;
 	//fprintf(stderr, "ttdp lw: lw_ttdp_receive\n");
 
 	/* Receive and parse TTDP HELLO message here */
@@ -1558,6 +1598,12 @@ static int lw_ttdp_receive(struct teamd_context *ctx, int events, void *priv) {
 	if (parse_ttdp_frame(buf, err, &hello_recv, ttdp_ppriv, ctx) == 0) {
 		struct ab* ab = ctx->runner_priv;
 		ab->lines_hello_stats[ttdp_ppriv->line].recv_hello_frames++;
+
+		teamd_ttdp_log_dbgx(ttdp_ppriv, "Recv HELLO in %s mode with peer status %d with lifesign %ld and topo %08x",
+			getTransmissionModeStr(hello_recv.timeoutSpeed),
+			ttdp_frame_is_peer_status_ok(&hello_recv) == 0,
+			(long int)hello_recv.lifeSign,
+			hello_recv.etbTopoCnt);
 
 		/* Stop the line status timer until we know what to do */
 		teamd_loop_callback_timer_set(
@@ -1599,8 +1645,23 @@ static int lw_ttdp_receive(struct teamd_context *ctx, int events, void *priv) {
 			teamd_loop_callback_enable(ctx, TTDP_PERIODIC_FORGET_PEER_CB_NAME, priv);
 
 			if (ttdp_ppriv->strict_peer_recv_status) {
-				/* If this option is set, we require the peer to also hear us
-				 * before we let the line come up. Otherwise, continue as normal */
+				/* In strict mode (when this option is set) there is nothing
+				 * more to do (except sending a reply in case the received
+				 * HELLO frame was sent in FAST mode) because we require the
+				 * peer to also notify us that he hears us before we consider
+				 * the line between us as "up" and can enable it in the LAG.
+				 * See -2-5 8.6.3 and 8.9.1 */
+
+				if (hello_recv.timeoutSpeed == TTDP_TRANSMISSION_MODE_FAST) {
+					/* The received HELLO frame was sent in FAST mode so a reply should be
+					 * sent back (a HELLO frame in SLOW mode), see -2-5 8.9.1 */
+					teamd_ttdp_log_dbgx(ttdp_ppriv, "Replying to FAST HELLO with peer status NOT ok");
+
+					/* Update remote id (MAC address of neighbor) so that is correct in the reply */
+					memcpy(ttdp_ppriv->remote_id, hello_recv.srcId.ether_addr_octet, ETH_ALEN);
+					lw_ttdp_send(ctx, ttdp_ppriv, TTDP_TRANSMISSION_MODE_REPLY);
+				}
+
 				return 0;
 			}
 		}
@@ -1621,52 +1682,47 @@ static int lw_ttdp_receive(struct teamd_context *ctx, int events, void *priv) {
 		}
 #endif
 
+		/* Stop waiting for End Port detection */
+		teamd_loop_callback_disable(ctx, TTDP_END_PORT_DETECT_DELAY_CB_NAME, priv);
+
+		teamd_loop_callback_disable(ctx, TTDP_PERIODIC_FAST_TIMEOUT_CB_NAME, priv);
+		teamd_loop_callback_disable(ctx, TTDP_PERIODIC_SLOW_TIMEOUT_CB_NAME, priv);
+		teamd_loop_callback_timer_set(ctx,
+			TTDP_PERIODIC_SLOW_TIMEOUT_CB_NAME,
+			priv,
+			&(ttdp_ppriv->slow_timeout),
+			&(ttdp_ppriv->slow_timeout));
+		teamd_loop_callback_enable(ctx, TTDP_PERIODIC_SLOW_TIMEOUT_CB_NAME, priv);
+
 		if (ttdp_ppriv->local_recovery_mode) {
 			ttdp_ppriv->local_recovery_mode = 0;
-			/* reset recovery mode timers */
-			teamd_loop_callback_disable(ctx, TTDP_PERIODIC_FAST_TIMEOUT_CB_NAME, priv);
-			teamd_loop_callback_disable(ctx, TTDP_PERIODIC_SLOW_TIMEOUT_CB_NAME, priv);
-
-			teamd_loop_callback_timer_set(ctx,
-				TTDP_PERIODIC_SLOW_TIMEOUT_CB_NAME,
-				priv,
-				&(ttdp_ppriv->slow_timeout),
-				&(ttdp_ppriv->slow_timeout));
-			teamd_loop_callback_enable(ctx, TTDP_PERIODIC_SLOW_TIMEOUT_CB_NAME, priv);
-
-			/* Stop sending in fast mode && start sending in slow mode again */
 			teamd_ttdp_log_infox(ttdp_ppriv, "Recovered - logical link state is now NO LONGER PENDING");
 			ttdp_start_slow_send_timer(ctx, ttdp_ppriv);
-
-		} else {
-
-			teamd_loop_callback_disable(ctx, TTDP_PERIODIC_FAST_TIMEOUT_CB_NAME, priv);
-			teamd_loop_callback_disable(ctx, TTDP_PERIODIC_SLOW_TIMEOUT_CB_NAME, priv);
-			teamd_loop_callback_timer_set(ctx,
-				TTDP_PERIODIC_SLOW_TIMEOUT_CB_NAME,
-				priv,
-				&(ttdp_ppriv->slow_timeout),
-				&(ttdp_ppriv->slow_timeout));
-			teamd_loop_callback_enable(ctx, TTDP_PERIODIC_SLOW_TIMEOUT_CB_NAME, priv);
 		}
-		struct ttdp_hello_tlv *prev_hello = get_latest_hello_frame();
-		if (prev_hello->timeoutSpeed == 1 && hello_recv.timeoutSpeed == 2)
-			ab->lines_hello_stats[ttdp_ppriv->line].remote_fast_activated++;
 
+		struct ttdp_hello_tlv *prev_hello = get_latest_hello_frame();
+		if (prev_hello->timeoutSpeed == TTDP_TRANSMISSION_MODE_SLOW && hello_recv.timeoutSpeed == TTDP_TRANSMISSION_MODE_FAST) {
+			ab->lines_hello_stats[ttdp_ppriv->line].remote_fast_activated++;
+		}
 		store_hello_frame(&hello_recv);
 
+		/* do necessary processing; store prev_neighbor; notify the runner of changes */
 		if (ab->is_s4r) {
-			primary_line = (hello_recv.primaryLine >> (6 - 2 * (hello_recv.egressLine - 'A')))  & 3;
+			primary_line = (hello_recv.primaryLine >> (6 - 2 * (hello_recv.egressLine - 'A'))) & 3;
 			primary_state = (primary_line == TTDP_LOGIC_TRUE) ? 1 : 0;
-
-			/* do necessary processing; store prev_neighbor; notify the runner of changes */
-			update_neighbor(ttdp_ppriv, hello_recv.srcId.ether_addr_octet,
-						hello_recv.cstUUid,
-						hello_recv.etbTopoCnt,
-						primary_state);
-		} else {
-			update_neighbor(ttdp_ppriv, hello_recv.srcId.ether_addr_octet, hello_recv.cstUUid, hello_recv.etbTopoCnt, 0);
 		}
+		update_neighbor(ttdp_ppriv, hello_recv.srcId.ether_addr_octet, hello_recv.cstUUid, hello_recv.etbTopoCnt, primary_state);
+
+		if (hello_recv.timeoutSpeed == TTDP_TRANSMISSION_MODE_FAST) {
+			/* The received HELLO frame was sent in FAST mode so a reply should be
+			 * sent back (a HELLO frame in SLOW mode), see -2-5 8.9.1 */
+			teamd_ttdp_log_dbgx(ttdp_ppriv, "Replying to FAST HELLO with peer status ok");
+
+			/* Update remote id (MAC address of neighbor) so that is correct in the reply */
+			memcpy(ttdp_ppriv->remote_id, hello_recv.srcId.ether_addr_octet, ETH_ALEN);
+			lw_ttdp_send(ctx, ttdp_ppriv, TTDP_TRANSMISSION_MODE_REPLY);
+		}
+
 		int notify = 0;
 		if ((memcmp(ttdp_ppriv->neighbor_uuid, ttdp_ppriv->prev_neighbor_uuid,
 			sizeof(ttdp_ppriv->neighbor_uuid)) != 0)
@@ -1736,9 +1792,9 @@ static int lw_ttdp_receive(struct teamd_context *ctx, int events, void *priv) {
 			}
 		}
 
-		if (notify)
+		if (notify) {
 			teamd_event_port_changed(ctx, ttdp_ppriv->start.common.tdport);
-
+		}
 
 		if (ttdp_ppriv->local_ttdp_link_up != true || ttdp_ppriv->heard != true) {
 			ttdp_ppriv->local_ttdp_link_up = true;
@@ -1746,17 +1802,8 @@ static int lw_ttdp_receive(struct teamd_context *ctx, int events, void *priv) {
 			set_neigh_hears_us(ctx, ttdp_ppriv, true);
 			update_parent_port_status(ctx, ttdp_ppriv);
 			update_overall_state(ctx, ttdp_ppriv);
-			teamd_ttdp_log_infox(ttdp_ppriv, "Logical link state is now UP");
+			teamd_ttdp_log_infox(ttdp_ppriv, "Logical link state is now UP (lifesign=%d)", hello_recv.lifeSign);
 		}
-
-		if (hello_recv.timeoutSpeed == 2) {
-			teamd_ttdp_log_dbgx(ttdp_ppriv, "Recv HELLO in FAST MODE, replying");
-			/* send a reply */
-			ttdp_ppriv->fast_reply = 1;
-			lw_ttdp_send(ctx, events, ttdp_ppriv);
-			ttdp_ppriv->fast_reply = 0;
-		}
-
 	} else {
 		teamd_ttdp_log_dbgx(ttdp_ppriv, "Invalid frame, aborting");
 		return 1;
@@ -1801,21 +1848,25 @@ static int lw_ttdp_link_status_delayed(struct teamd_context *ctx, int events,
 	ttdp_ppriv->local_phy_link_event_delayed = false;
 	ttdp_ppriv->local_phy_link_up = link_up;
 
+	/* We do no longer act on physical links state...
 	if (!link_up) {
 		update_neighbor_to_none(ttdp_ppriv);
 	}
+	*/
 	teamd_ttdp_log_infox(ttdp_ppriv, "Reporting delayed link state %s", link_up ? "UP" : "DOWN");
 
-	//teamd_event_port_changed(ctx, tdport);
+	/* We do no longer act on physical links state...
 	update_parent_port_status(ctx, ttdp_ppriv);
 	return update_overall_state(ctx, priv);
+	*/
+	return 0;
 }
 
 /* FIXME check if the delayed thing is actually aborted properly */
 static int lw_ttdp_do_port_changed(struct teamd_context *ctx,
 					       struct teamd_port *tdport,
 					       void *priv) {
-	struct lw_common_port_priv *common_ppriv = priv;
+	//struct lw_common_port_priv *common_ppriv = priv;
 	struct lw_ttdp_port_priv *ttdp_ppriv = (struct lw_ttdp_port_priv *)priv;
 	bool link_up = team_is_port_link_up(tdport->team_port);
 
@@ -1828,12 +1879,13 @@ static int lw_ttdp_do_port_changed(struct teamd_context *ctx,
 		/* Link went down -> up */
 		if (timespec_is_zero(&(ttdp_ppriv->link_state_delay_up))) {
 			/* No delay, report immediately */
-			teamd_ttdp_log_infox(ttdp_ppriv, "Setting link state to UP immediately");
-			ttdp_ppriv->local_phy_link_up = link_up;
+			teamd_ttdp_log_infox(ttdp_ppriv, "Setting physical link state to UP immediately");
+			/* We do no longer act on physical links state...
 			teamd_link_watch_check_link_up(ctx, tdport, common_ppriv, link_up);
+			*/
 			return lw_ttdp_link_status_delayed(ctx, 0, priv);
 		} else {
-			teamd_ttdp_log_infox(ttdp_ppriv, "Starting link state UP reporting delay");
+			teamd_ttdp_log_infox(ttdp_ppriv, "Starting physical link state UP reporting delay");
 			ttdp_ppriv->local_phy_link_event_delayed = true;
 			teamd_loop_callback_timer_set(ctx,
 				TTDP_PERIODIC_LINK_STATE_DELAY_CB_NAME,
@@ -1847,12 +1899,13 @@ static int lw_ttdp_do_port_changed(struct teamd_context *ctx,
 		/* Link went up -> down */
 		if (timespec_is_zero(&(ttdp_ppriv->link_state_delay_down))) {
 			/* No delay, report immediately */
-			teamd_ttdp_log_infox(ttdp_ppriv, "Setting link state to DOWN immediately");
-			ttdp_ppriv->local_phy_link_up = link_up;
+			teamd_ttdp_log_infox(ttdp_ppriv, "Setting physical link state to DOWN immediately");
+			/* We do no longer act on physical links state...
 			teamd_link_watch_check_link_up(ctx, tdport, common_ppriv, link_up);
+			*/
 			return lw_ttdp_link_status_delayed(ctx, 0, priv);
 		} else {
-			teamd_ttdp_log_infox(ttdp_ppriv, "Starting link state DOWN reporting delay");
+			teamd_ttdp_log_infox(ttdp_ppriv, "Starting physical link state DOWN reporting delay");
 			ttdp_ppriv->local_phy_link_event_delayed = true;
 			teamd_loop_callback_timer_set(ctx,
 				TTDP_PERIODIC_LINK_STATE_DELAY_CB_NAME,
@@ -1906,6 +1959,11 @@ static int lw_ttdp_port_added(struct teamd_context *ctx,
 
 	int err;
 
+	err = team_set_port_user_linkup_enabled(ctx->th, tdport->ifindex, false);
+	if (err) {
+		teamd_log_err("%s: Failed to disable user linkup.", tdport->ifname);
+	}
+
 	/* load options & set timespec fields of ttdp_ppriv */
 	err = lw_ttdp_load_options(ctx, tdport, priv);
 	if (err) {
@@ -1918,6 +1976,7 @@ static int lw_ttdp_port_added(struct teamd_context *ctx,
 
 	/* set up remaining local data */
 	ttdp_ppriv->local_recovery_mode = 0;
+	ttdp_ppriv->heard = false;
 	ttdp_ppriv->silent = false;
 	ttdp_ppriv->lifesign = 0;
 	ttdp_ppriv->local_phy_link_event_delayed = false;
@@ -1946,14 +2005,6 @@ static int lw_ttdp_port_added(struct teamd_context *ctx,
 	if (err) {
 		teamd_log_err("Failed add socket callback.");
 	}
-
-
-	err = team_set_port_user_linkup_enabled(ctx->th, tdport->ifindex, false);
-	if (err) {
-		teamd_log_err("%s: Failed to enable user linkup.",
-			      tdport->ifname);
-	}
-
 
 	err = teamd_event_watch_register(ctx, &lw_ttdp_port_watch_ops, priv);
 	if (err) {
@@ -1984,27 +2035,29 @@ static int lw_ttdp_port_added(struct teamd_context *ctx,
 		ttdp_ppriv,
 		lw_ttdp_forget_peer);
 
-
-	//teamd_loop_callback_enable(ctx, TTDP_PERIODIC_FAST_TIMEOUT_CB_NAME, ttdp_ppriv);
+	teamd_loop_callback_timer_add_set(
+		ctx,
+		TTDP_END_PORT_DETECT_DELAY_CB_NAME,
+		ttdp_ppriv,
+		lw_ttdp_end_port_detected,
+		&(ttdp_ppriv->end_port_detect_delay_ms),
+		&(ttdp_ppriv->end_port_detect_delay_ms));
 
 	teamd_loop_callback_enable(ctx, TTDP_PERIODIC_SLOW_TIMEOUT_CB_NAME, ttdp_ppriv);
 
-
 	/* This one we only add - it gets set up when needed upon link status change */
-	teamd_loop_callback_timer_add(ctx, TTDP_PERIODIC_LINK_STATE_DELAY_CB_NAME,
-					    ttdp_ppriv, lw_ttdp_link_status_delayed);
+	teamd_loop_callback_timer_add(ctx,
+		TTDP_PERIODIC_LINK_STATE_DELAY_CB_NAME,
+		ttdp_ppriv,
+		lw_ttdp_link_status_delayed);
 
 	teamd_loop_callback_enable(ctx, TTDP_SOCKET_CB_NAME, ttdp_ppriv);
 
-	if (ttdp_ppriv->initial_mode == TTDP_INITIAL_MODE_FAST) {
-		//teamd_ttdp_log_infox("Starting in fast mode");
+	if (ttdp_ppriv->initial_mode == TTDP_TRANSMISSION_MODE_FAST) {
 		teamd_ttdp_log_infox(ttdp_ppriv, "Starting in FAST transmission mode");
-		//teamd_loop_callback_enable(ctx, TTDP_PERIODIC_FAST_SEND_CB_NAME, ttdp_ppriv);
 		ttdp_start_fast_send_timer(ctx, ttdp_ppriv);
 	} else {
-		//teamd_ttdp_log_infox("Starting in slow mode");
 		teamd_ttdp_log_infox(ttdp_ppriv, "Starting in SLOW transmission mode");
-		//teamd_loop_callback_enable(ctx, TTDP_PERIODIC_SLOW_SEND_CB_NAME, ttdp_ppriv);
 		ttdp_start_slow_send_timer(ctx, ttdp_ppriv);
 	}
 
@@ -2038,7 +2091,6 @@ static void lw_ttdp_port_removed(struct teamd_context *ctx,
 	teamd_event_watch_unregister(ctx, &lw_ttdp_port_watch_ops, priv);
 	lw_ttdp_sock_close(priv);
 }
-
 
 static int lw_ttdp_get_overall_state(struct teamd_context *ctx,
 					 struct team_state_gsc *gsc,
@@ -2174,6 +2226,15 @@ static int lw_ttdp_fast_timeout_get(struct teamd_context *ctx,
 	return 0;
 }
 
+static int lw_ttdp_end_port_detect_delay_ms_get(struct teamd_context *ctx,
+					 struct team_state_gsc *gsc,
+					 void *priv) {
+	struct lw_ttdp_port_priv* ttdp_ppriv = priv;
+	struct timespec* ts;
+	ts = &(ttdp_ppriv->end_port_detect_delay_ms);
+	gsc->data.int_val = timespec_to_ms(ts);
+	return 0;
+}
 static int lw_ttdp_forget_peer_timeout_get(struct teamd_context *ctx,
 					 struct team_state_gsc *gsc,
 					 void *priv) {
@@ -2467,6 +2528,12 @@ static const struct teamd_state_val lw_ttdp_state_vals[] = {
 		.subpath = "fast_timeout",
 		.type = TEAMD_STATE_ITEM_TYPE_INT,
 		.getter = lw_ttdp_fast_timeout_get,
+	},
+
+	{
+		.subpath = "end_port_detect_delay_ms",
+		.type = TEAMD_STATE_ITEM_TYPE_INT,
+		.getter = lw_ttdp_end_port_detect_delay_ms_get,
 	},
 
 	{
