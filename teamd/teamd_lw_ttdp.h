@@ -129,6 +129,13 @@ struct lw_ttdp_port_priv {
 	struct timespec* initial_slow_interval; /* either immediate or slow_interval */
 	struct timespec* initial_fast_interval; /* either immediate or fast_interval */
 
+	/* Link status (and thereby the transmission mode) is judged by evaluating
+	 * the existance and absence of HELLO frames without considering the
+	 * physical link state.
+	 * By setting this option also the physical link state will be considered.
+	 * Default is FALSE */
+	bool physical_link_state_mode;
+
 	/* These delays control how long we wait after a change of the physical link
 	 * state before reportng & accepting such a change. If the change is reversed
 	 * withing the delay, we don't report it at all. */
@@ -140,6 +147,7 @@ struct lw_ttdp_port_priv {
 	/* Transmission mode to start in initially - 1 for SLOW and 2 for FAST.
 	 * Default is 1 (slow). */
 	int initial_mode;
+
 	/* Transmission mode to enter when we've given up recovery i.e. when no
 	 * neighbor is talking to us. If set to TRUE, we remain in fast transmission
 	 * mode; if set to FALSE, we jump back into slow mode. We consider logical

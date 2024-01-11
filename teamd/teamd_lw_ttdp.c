@@ -833,6 +833,14 @@ static int lw_ttdp_load_options(struct teamd_context *ctx,
 	}
 	ttdp_ppriv->immediate_timer_start_mode = tmpb;
 
+	err = teamd_config_bool_get(ctx, &tmpb, "@.physical_link_state_mode", cpcookie);
+	if (err) {
+		teamd_log_warn("Failed to get physical_link_state_mode, defaulting to off");
+		tmpb = false;
+	} else {
+		teamd_ttdp_log_dbgx(ttdp_ppriv, "ttdp physical_link_state_mode %d", tmpb);
+	}
+	ttdp_ppriv->physical_link_state_mode = tmpb;
 
 	err = teamd_config_int_get(ctx, &tmp, "@.link_state_delay_up", cpcookie);
 	if (err) {
@@ -1848,17 +1856,16 @@ static int lw_ttdp_link_status_delayed(struct teamd_context *ctx, int events,
 	ttdp_ppriv->local_phy_link_event_delayed = false;
 	ttdp_ppriv->local_phy_link_up = link_up;
 
-	/* We do no longer act on physical links state...
-	if (!link_up) {
-		update_neighbor_to_none(ttdp_ppriv);
-	}
-	*/
 	teamd_ttdp_log_infox(ttdp_ppriv, "Reporting delayed link state %s", link_up ? "UP" : "DOWN");
 
-	/* We do no longer act on physical links state...
-	update_parent_port_status(ctx, ttdp_ppriv);
-	return update_overall_state(ctx, priv);
-	*/
+	if (ttdp_ppriv->physical_link_state_mode) {
+		if (!link_up) {
+			update_neighbor_to_none(ttdp_ppriv);
+		}
+		update_parent_port_status(ctx, ttdp_ppriv);
+		return update_overall_state(ctx, priv);
+	}
+
 	return 0;
 }
 
@@ -1866,7 +1873,7 @@ static int lw_ttdp_link_status_delayed(struct teamd_context *ctx, int events,
 static int lw_ttdp_do_port_changed(struct teamd_context *ctx,
 					       struct teamd_port *tdport,
 					       void *priv) {
-	//struct lw_common_port_priv *common_ppriv = priv;
+	struct lw_common_port_priv *common_ppriv = priv;
 	struct lw_ttdp_port_priv *ttdp_ppriv = (struct lw_ttdp_port_priv *)priv;
 	bool link_up = team_is_port_link_up(tdport->team_port);
 
@@ -1880,9 +1887,9 @@ static int lw_ttdp_do_port_changed(struct teamd_context *ctx,
 		if (timespec_is_zero(&(ttdp_ppriv->link_state_delay_up))) {
 			/* No delay, report immediately */
 			teamd_ttdp_log_infox(ttdp_ppriv, "Setting physical link state to UP immediately");
-			/* We do no longer act on physical links state...
-			teamd_link_watch_check_link_up(ctx, tdport, common_ppriv, link_up);
-			*/
+			if (ttdp_ppriv->physical_link_state_mode) {
+				teamd_link_watch_check_link_up(ctx, tdport, common_ppriv, link_up);
+			}
 			return lw_ttdp_link_status_delayed(ctx, 0, priv);
 		} else {
 			teamd_ttdp_log_infox(ttdp_ppriv, "Starting physical link state UP reporting delay");
@@ -1900,9 +1907,9 @@ static int lw_ttdp_do_port_changed(struct teamd_context *ctx,
 		if (timespec_is_zero(&(ttdp_ppriv->link_state_delay_down))) {
 			/* No delay, report immediately */
 			teamd_ttdp_log_infox(ttdp_ppriv, "Setting physical link state to DOWN immediately");
-			/* We do no longer act on physical links state...
-			teamd_link_watch_check_link_up(ctx, tdport, common_ppriv, link_up);
-			*/
+			if (ttdp_ppriv->physical_link_state_mode) {
+				teamd_link_watch_check_link_up(ctx, tdport, common_ppriv, link_up);
+			}
 			return lw_ttdp_link_status_delayed(ctx, 0, priv);
 		} else {
 			teamd_ttdp_log_infox(ttdp_ppriv, "Starting physical link state DOWN reporting delay");
@@ -2155,6 +2162,14 @@ static int lw_ttdp_set_fast_failed_recovery_mode(struct teamd_context *ctx,
 					 void *priv) {
 	struct lw_ttdp_port_priv* ttdp_ppriv = priv;
 	ttdp_ppriv->fast_failed_recovery_mode = gsc->data.bool_val;
+	return 0;
+}
+
+static int lw_ttdp_get_physical_link_state_mode(struct teamd_context *ctx,
+					 struct team_state_gsc *gsc,
+					 void *priv) {
+	struct lw_ttdp_port_priv* ttdp_ppriv = priv;
+	gsc->data.bool_val = ttdp_ppriv->physical_link_state_mode;
 	return 0;
 }
 
@@ -2482,6 +2497,13 @@ static const struct teamd_state_val lw_ttdp_state_vals[] = {
 		.type = TEAMD_STATE_ITEM_TYPE_BOOL,
 		.getter = lw_ttdp_get_fast_failed_recovery_mode,
 		.setter = lw_ttdp_set_fast_failed_recovery_mode,
+	},
+
+	/* If enabled, the ethernet physical link status is considerered then judging the overall link status */
+	{
+		.subpath = "physical_link_state_mode",
+		.type = TEAMD_STATE_ITEM_TYPE_BOOL,
+		.getter = lw_ttdp_get_physical_link_state_mode,
 	},
 
 	/* Ethernet physical link status delays */
