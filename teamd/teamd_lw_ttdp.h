@@ -71,8 +71,9 @@
 #define TTDP_NEIGH_PORT_DISAGREES 1
 #define TTDP_NEIGH_PORT_AGREES 2
 
-#define TTDP_INITIAL_MODE_SLOW 1
-#define TTDP_INITIAL_MODE_FAST 2
+#define TTDP_TRANSMISSION_MODE_SLOW 1  /* Periodical (100ms) sending in normal/slow mode */
+#define TTDP_TRANSMISSION_MODE_FAST 2  /* Periodical (15ms) sending in recovery/fast mode */
+#define TTDP_TRANSMISSION_MODE_REPLY 3 /* Reply */
 
 #define TTDP_VENDOR_INFO_DEFAULT "UNSPECIFIED"
 
@@ -113,6 +114,10 @@ struct lw_ttdp_port_priv {
 	 * down. Default is TTDP_FAST_TIMEOUT_DEFAULT */
 	struct timespec fast_timeout;
 
+	/* Time after line no longer considered as ok until the port should be
+	 * considered as an end port. Default is TTDP_END_PORT_DETECT_DELAY_MS_DEFAULT */
+	struct timespec end_port_detect_delay_ms;
+
 	/* set to 1 ms, and used as a value for "don't wait" below */
 	struct timespec immediate;
 	/* depending on the value of immediate_timer_start_mode below, these variables
@@ -123,6 +128,13 @@ struct lw_ttdp_port_priv {
 	 * wait for the whole interval. */
 	struct timespec* initial_slow_interval; /* either immediate or slow_interval */
 	struct timespec* initial_fast_interval; /* either immediate or fast_interval */
+
+	/* Link status (and thereby the transmission mode) is judged by evaluating
+	 * the existance and absence of HELLO frames without considering the
+	 * physical link state.
+	 * By setting this option also the physical link state will be considered.
+	 * Default is FALSE */
+	bool physical_link_state_mode;
 
 	/* These delays control how long we wait after a change of the physical link
 	 * state before reportng & accepting such a change. If the change is reversed
@@ -135,6 +147,7 @@ struct lw_ttdp_port_priv {
 	/* Transmission mode to start in initially - 1 for SLOW and 2 for FAST.
 	 * Default is 1 (slow). */
 	int initial_mode;
+
 	/* Transmission mode to enter when we've given up recovery i.e. when no
 	 * neighbor is talking to us. If set to TRUE, we remain in fast transmission
 	 * mode; if set to FALSE, we jump back into slow mode. We consider logical
@@ -207,6 +220,8 @@ struct lw_ttdp_port_priv {
 	 * HELLO frame. */
 	uint32_t checksum_fail_counter;
 
+	uint8_t remote_id[ETH_ALEN];
+
 	/* Current neighbor node MAC... */
 	uint8_t neighbor_mac[ETH_ALEN];
 	/* ...UUID... */
@@ -257,7 +272,6 @@ struct lw_ttdp_port_priv {
 
 	uint32_t last_ok_lifesign;
 	struct timespec last_xmit;
-	int fast_reply;
 };
 
 /* Structure that holds all data for a single neighbor. */
