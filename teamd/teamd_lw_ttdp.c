@@ -626,7 +626,11 @@ err_out:
 }
 
 static bool get_overall_state(struct lw_ttdp_port_priv *ttdp_ppriv) {
-	return (ttdp_ppriv->local_phy_link_up && ttdp_ppriv->local_ttdp_link_up);
+	if (ttdp_ppriv->physical_link_state_mode) {
+		// Consider physical link state
+		return ttdp_ppriv->local_phy_link_up && ttdp_ppriv->local_ttdp_link_up;
+	}
+	return ttdp_ppriv->local_ttdp_link_up;
 }
 
 static void update_neighbor(struct lw_ttdp_port_priv *ttdp_ppriv,
@@ -698,7 +702,7 @@ static void update_parent_port_status(struct teamd_context *ctx,
 			(ab->port_statuses[1] << 4) |
 			(ab->port_statuses[2] << 2) |
 			(ab->port_statuses[3] << 0);
-		teamd_ttdp_log_dbgx(ttdp_ppriv, "setting line status to %d (heard = %d)", state, ttdp_ppriv->heard);
+		teamd_ttdp_log_dbgx(ttdp_ppriv, "setting line status to %d (heard = %d)", new_state, ttdp_ppriv->heard);
 		if (ab->line_state_update_func) {
 			ab->line_state_update_func(ctx, ctx->runner_priv);
 		}
@@ -706,16 +710,16 @@ static void update_parent_port_status(struct teamd_context *ctx,
 }
 
 static void force_parent_port_status(struct teamd_context *ctx,
-	struct lw_ttdp_port_priv *ttdp_ppriv, int state) {
+	struct lw_ttdp_port_priv *ttdp_ppriv, int new_state) {
 	struct ab* ab = ctx->runner_priv;
-	if (ab->port_statuses[ttdp_ppriv->line] != state) {
-		ab->port_statuses[ttdp_ppriv->line] = state;
+	if (ab->port_statuses[ttdp_ppriv->line] != new_state) {
+		ab->port_statuses[ttdp_ppriv->line] = new_state;
 		ab->port_statuses_b =
 			(ab->port_statuses[0] << 6) |
 			(ab->port_statuses[1] << 4) |
 			(ab->port_statuses[2] << 2) |
 			(ab->port_statuses[3] << 0);
-		teamd_ttdp_log_dbgx(ttdp_ppriv, "forcing line status to %d", state);
+		teamd_ttdp_log_dbgx(ttdp_ppriv, "forcing line status to %d (heard = %d)", new_state, ttdp_ppriv->heard);
 		if (ab->line_state_update_func) {
 			ab->line_state_update_func(ctx, ctx->runner_priv);
 		}
@@ -986,12 +990,21 @@ static int lw_ttdp_load_options(struct teamd_context *ctx,
 static int update_overall_state(struct teamd_context *ctx, void* priv){
 	struct lw_common_port_priv *common_ppriv = priv;
 	struct lw_ttdp_port_priv* ttdp_ppriv = (struct lw_ttdp_port_priv*)priv;
-	bool overall_state = (ttdp_ppriv->local_ttdp_link_up && ttdp_ppriv->local_phy_link_up && ttdp_ppriv->heard);
+	bool overall_state;
+	if (ttdp_ppriv->physical_link_state_mode) {
+		// Consider physical link state
+		overall_state = ttdp_ppriv->local_phy_link_up && ttdp_ppriv->local_ttdp_link_up && ttdp_ppriv->heard;
+	} else {
+		// Ignore physical link state
+		overall_state = ttdp_ppriv->local_ttdp_link_up && ttdp_ppriv->heard;
+	}
+
 	teamd_ttdp_log_infox(ttdp_ppriv, "state change to -> %s (ttdp_link_up=%d phy_link_up=%d heard=%d)",
-	    (overall_state ? "UP" : "DOWN"),
-		ttdp_ppriv->local_ttdp_link_up,
-		ttdp_ppriv->local_phy_link_up,
-		ttdp_ppriv->heard);
+	    overall_state ? "UP" : "DOWN",
+	    ttdp_ppriv->local_ttdp_link_up,
+	    ttdp_ppriv->local_phy_link_up,
+	    ttdp_ppriv->heard);
+
 	return teamd_link_watch_check_link_up(ctx, common_ppriv->tdport, priv, overall_state);
 }
 
@@ -1581,7 +1594,6 @@ static int lw_ttdp_receive(struct teamd_context *ctx, int events, void *priv) {
 	static struct ttdp_hello_tlv hello_recv;
 	uint8_t primary_line;
 	uint8_t primary_state = 0;
-	//fprintf(stderr, "ttdp lw: lw_ttdp_receive\n");
 
 	/* Receive and parse TTDP HELLO message here */
 	static u_int8_t buf[TTDP_HELLO_FRAME_SIZE_MAX];
@@ -1599,17 +1611,24 @@ static int lw_ttdp_receive(struct teamd_context *ctx, int events, void *priv) {
 	if (ttdp_ppriv->deaf == true)
 		return 0;
 
-	//fprintf(stderr, "Parsing TTDP HELLO frame, length %d\n", err);
-
 	/* FIXME this should maybe be decoupled from _recv and not done immediately */
 	/* see ab_state_active_port_set() in teamd_runner_activebackup.c */
 	if (parse_ttdp_frame(buf, err, &hello_recv, ttdp_ppriv, ctx) == 0) {
 		struct ab* ab = ctx->runner_priv;
-		ab->lines_hello_stats[ttdp_ppriv->line].recv_hello_frames++;
 
-		teamd_ttdp_log_dbgx(ttdp_ppriv, "Recv HELLO in %s mode with peer status %d with lifesign %ld and topo %08x",
+		/* Update stats */
+		struct ttdp_hello_tlv *prev_hello = get_latest_hello_frame();
+		ab->lines_hello_stats[ttdp_ppriv->line].recv_hello_frames++;
+		if (prev_hello->timeoutSpeed == TTDP_TRANSMISSION_MODE_SLOW && hello_recv.timeoutSpeed == TTDP_TRANSMISSION_MODE_FAST) {
+			ab->lines_hello_stats[ttdp_ppriv->line].remote_fast_activated++;
+		}
+		store_hello_frame(&hello_recv);
+
+		bool peer_status_ok = ttdp_frame_is_peer_status_ok(&hello_recv) == 0;
+
+		teamd_ttdp_log_dbgx(ttdp_ppriv, "Recv HELLO in %s mode with peer status %d, lifesign %ld and topo %08x",
 			getTransmissionModeStr(hello_recv.timeoutSpeed),
-			ttdp_frame_is_peer_status_ok(&hello_recv) == 0,
+			peer_status_ok,
 			(long int)hello_recv.lifeSign,
 			hello_recv.etbTopoCnt);
 
@@ -1623,32 +1642,22 @@ static int lw_ttdp_receive(struct teamd_context *ctx, int events, void *priv) {
 		teamd_loop_callback_disable(ctx, TTDP_PERIODIC_FORGET_PEER_CB_NAME, priv);
 		ttdp_ppriv->last_ok_lifesign = hello_recv.lifeSign;
 
-		if (ttdp_frame_is_peer_status_ok(&hello_recv) != 0) {
-			/* Received a frame from a neighbor that doesn't hear us */
-			/* Set our peer status to OK, but don't set link logical state to up */
+		set_neigh_hears_us(ctx, ttdp_ppriv, peer_status_ok);
 
-			// teamd_ttdp_log_infox(ttdp_ppriv, "AGREE Got peer frame with bad RecvStatus "
-			// 	"%c %d %.4X %d %d %d   %d",
-			// 	hello_recv.egressLine,
-			// 	hello_recv.egressLine,
-			// 	hello_recv.recvStatuses,
-
-			// 	(hello_recv.egressLine - 'A'),
-			// 	(2*(hello_recv.egressLine - 'A')),
-			// 	(6-(2*(hello_recv.egressLine - 'A'))),
-
-			// 	((hello_recv.recvStatuses >> (6-(2*(hello_recv.egressLine - 'A')))) & 3)
-			// 	);
-
-			/* FIXME should have a separate timer here, to set recvstatus back
-			 * down to ERROR in case we don't get frames for a while */
-
-			set_neigh_hears_us(ctx, ttdp_ppriv, false);
-
+		if (peer_status_ok) {
+			// The received HELLO frame indicates that the neighbor have heard us
+			// Set own peer status to OK and consider link logical state as UP
+			ttdp_ppriv->local_ttdp_link_up = true;
+			ttdp_ppriv->forget_peer_timer_running = false;
+			update_parent_port_status(ctx, ttdp_ppriv);
+			update_overall_state(ctx, ttdp_ppriv);
+		} else {
+			// The received HELLO frame does not indicate that the neighbor have heard us
+			// Set own peer status to OK but do not consider link logical state as UP
 			force_parent_port_status(ctx, ttdp_ppriv, 2);
+
 			if (ttdp_ppriv->forget_peer_timer_running == false)
 				teamd_ttdp_log_infox(ttdp_ppriv, "Neighbor heard - starting line status timer...");
-
 			ttdp_ppriv->forget_peer_timer_running = true;
 			teamd_loop_callback_enable(ctx, TTDP_PERIODIC_FORGET_PEER_CB_NAME, priv);
 
@@ -1707,12 +1716,6 @@ static int lw_ttdp_receive(struct teamd_context *ctx, int events, void *priv) {
 			teamd_ttdp_log_infox(ttdp_ppriv, "Recovered - logical link state is now NO LONGER PENDING");
 			ttdp_start_slow_send_timer(ctx, ttdp_ppriv);
 		}
-
-		struct ttdp_hello_tlv *prev_hello = get_latest_hello_frame();
-		if (prev_hello->timeoutSpeed == TTDP_TRANSMISSION_MODE_SLOW && hello_recv.timeoutSpeed == TTDP_TRANSMISSION_MODE_FAST) {
-			ab->lines_hello_stats[ttdp_ppriv->line].remote_fast_activated++;
-		}
-		store_hello_frame(&hello_recv);
 
 		/* do necessary processing; store prev_neighbor; notify the runner of changes */
 		if (ab->is_s4r) {
